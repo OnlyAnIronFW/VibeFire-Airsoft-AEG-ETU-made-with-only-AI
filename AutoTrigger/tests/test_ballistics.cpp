@@ -180,3 +180,150 @@ TEST(BallisticsTest, FocalLengthScaling) {
     // Double fy → double drop_pixels (drop_meters same)
     EXPECT_NEAR(r2.drop_pixels, r1.drop_pixels * 2.0f, 0.01f);
 }
+
+// ─────────────────────────────────────────────────────
+// Helper: build a physically-plausible 801×3 drop table
+// ─────────────────────────────────────────────────────
+namespace {
+
+void write_drop_table(const std::string& path) {
+    std::vector<float> tbl(801 * 3, 0.0f);
+    for (int i = 0; i < 801; ++i) {
+        float r = static_cast<float>(i) * 0.1f;
+        for (int j = 0; j < 3; ++j) {
+            float v = (j == 0) ? 55.0f : ((j == 1) ? 70.0f : 90.0f);
+            // Approximate drop: g·r²/(2·v²) × 1.4 drag multiplier
+            tbl[i * 3 + j] = 9.81f * r * r / (2.0f * v * v) * 1.4f;
+        }
+    }
+    write_table_file(path, tbl.data(), tbl.size());
+}
+
+} // namespace
+
+// ══════════════════════════════════════════════════════
+//  Configurable ballistics physics — RED phase
+//
+//  These tests exercise set_config() / config() which
+//  are DECLARED in ballistics.h but NOT YET IMPLEMENTED.
+//  Tests MUST COMPILE (link failure is expected).
+// ══════════════════════════════════════════════════════
+
+// ─────────────────────────────────────────────────────
+// Test 12: Doubling dart mass → less drop
+//
+//   alpha = (ρ·A·Cd) / (2·m)   →   α ∝ 1/m
+//   double mass → half alpha → half deceleration → less drop
+// ─────────────────────────────────────────────────────
+TEST(BallisticsTest, DoubleMassLessDrop) {
+    write_drop_table("test_cfg_doublemass.bin");
+
+    autotrigger::Ballistics bal;
+    ASSERT_TRUE(bal.load_table("test_cfg_doublemass.bin"));
+
+    // Baseline: default config (dart_mass_kg = 0.002)
+    auto ref = bal.compute_aimpoint(30.0f, 70.0f);
+    ASSERT_GT(ref.drop_pixels, 0.0f);
+
+    // Double the dart mass → expect LESS drop
+    autotrigger::BallisticsConfig cfg;
+    cfg.dart_mass_kg = 0.004f;  // 2× default
+    bal.set_config(cfg);
+    auto result = bal.compute_aimpoint(30.0f, 70.0f);
+
+    EXPECT_LT(result.drop_pixels, ref.drop_pixels);
+}
+
+// ─────────────────────────────────────────────────────
+// Test 13: Doubling drag coefficient → more drop
+//
+//   alpha ∝ Cd  →  double Cd → double alpha → more drop
+// ─────────────────────────────────────────────────────
+TEST(BallisticsTest, DoubleCdMoreDrop) {
+    write_drop_table("test_cfg_doublecd.bin");
+
+    autotrigger::Ballistics bal;
+    ASSERT_TRUE(bal.load_table("test_cfg_doublecd.bin"));
+
+    // Baseline: default config (drag_coefficient = 0.67)
+    auto ref = bal.compute_aimpoint(30.0f, 70.0f);
+    ASSERT_GT(ref.drop_pixels, 0.0f);
+
+    // Double Cd → expect MORE drop
+    autotrigger::BallisticsConfig cfg;
+    cfg.drag_coefficient = 1.34f;  // 2× default
+    bal.set_config(cfg);
+    auto result = bal.compute_aimpoint(30.0f, 70.0f);
+
+    EXPECT_GT(result.drop_pixels, ref.drop_pixels);
+}
+
+// ─────────────────────────────────────────────────────
+// Test 14: Identical custom config → bit-identical output
+// ─────────────────────────────────────────────────────
+TEST(BallisticsTest, CustomConfigDeterministic) {
+    write_drop_table("test_cfg_deterministic.bin");
+
+    autotrigger::BallisticsConfig cfg;
+    cfg.dart_mass_kg     = 0.003f;
+    cfg.drag_coefficient = 0.8f;
+
+    autotrigger::Ballistics bal1;
+    ASSERT_TRUE(bal1.load_table("test_cfg_deterministic.bin"));
+    bal1.set_config(cfg);
+    auto r1 = bal1.compute_aimpoint(25.0f, 55.0f);
+
+    autotrigger::Ballistics bal2;
+    ASSERT_TRUE(bal2.load_table("test_cfg_deterministic.bin"));
+    bal2.set_config(cfg);
+    auto r2 = bal2.compute_aimpoint(25.0f, 55.0f);
+
+    // Same config + same table → MUST be bit-identical
+    EXPECT_FLOAT_EQ(r1.drop_pixels, r2.drop_pixels);
+    EXPECT_FLOAT_EQ(r1.time_of_flight, r2.time_of_flight);
+}
+
+// ─────────────────────────────────────────────────────
+// Test 15: Explicit default config matches implicit default
+// ─────────────────────────────────────────────────────
+TEST(BallisticsTest, DefaultConfigMatchesLegacy) {
+    write_drop_table("test_cfg_legacy.bin");
+
+    // Instance A: no set_config() call (implicit defaults)
+    autotrigger::Ballistics bal_no_config;
+    ASSERT_TRUE(bal_no_config.load_table("test_cfg_legacy.bin"));
+    auto r1 = bal_no_config.compute_aimpoint(40.0f, 70.0f);
+
+    // Instance B: explicit set_config(BallisticsConfig{})
+    autotrigger::Ballistics bal_explicit;
+    ASSERT_TRUE(bal_explicit.load_table("test_cfg_legacy.bin"));
+    autotrigger::BallisticsConfig cfg;  // all-default values
+    bal_explicit.set_config(cfg);
+    auto r2 = bal_explicit.compute_aimpoint(40.0f, 70.0f);
+
+    EXPECT_FLOAT_EQ(r1.drop_pixels, r2.drop_pixels);
+    EXPECT_FLOAT_EQ(r1.time_of_flight, r2.time_of_flight);
+}
+
+// ─────────────────────────────────────────────────────
+// Test 16: set_config() / config() round-trip integrity
+// ─────────────────────────────────────────────────────
+TEST(BallisticsTest, SetConfigGetConfigRoundTrip) {
+    autotrigger::Ballistics bal;
+
+    autotrigger::BallisticsConfig c1;
+    c1.dart_mass_kg     = 0.003f;
+    c1.drag_coefficient = 0.8f;
+    c1.dart_area_m2     = 1.5e-4f;
+    c1.air_density      = 1.1f;
+    c1.gravity          = 9.78f;
+
+    bal.set_config(c1);
+    const autotrigger::BallisticsConfig& c2 = bal.config();
+
+    EXPECT_FLOAT_EQ(c1.dart_mass_kg,     c2.dart_mass_kg);
+    EXPECT_FLOAT_EQ(c1.drag_coefficient, c2.drag_coefficient);
+    EXPECT_FLOAT_EQ(c1.dart_area_m2,     c2.dart_area_m2);
+    EXPECT_FLOAT_EQ(c1.air_density,      c2.air_density);
+    EXPECT_FLOAT_EQ(c1.gravity,          c2.gravity);
+}

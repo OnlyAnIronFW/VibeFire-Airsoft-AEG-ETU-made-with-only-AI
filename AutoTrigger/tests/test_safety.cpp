@@ -1,4 +1,5 @@
 #include "autotrigger/safety.h"
+#include "autotrigger/ranging.h"
 
 // HAL interface needed for MockTrigger definition
 #include "autotrigger/hal/itrigger.h"
@@ -323,6 +324,114 @@ TEST(SafetyIntegrationTest, RunOnce_DoesNotAutoKickWatchdog) {
 
     safety.advance_time_ms(60);  // Total 110 ms since last kick
     EXPECT_FALSE(safety.is_watchdog_alive());
+}
+
+// ────────────────────────────────────────────────────────────
+// TDD: ToF sensor check delegation via IRanging::try_ping()
+//
+// These tests use Safety (NOT SafetyMock) with RangingMock
+// to verify that ping_tof_sensor_impl() delegates to
+// ranging_->try_ping().  Currently ping_tof_sensor_impl()
+// uses raw I²C VL53L1X code — the RangingMock is ignored.
+// Tests MUST fail (RED phase) until the implementation is
+// refactored to call ranging_->try_ping().
+// ────────────────────────────────────────────────────────────
+
+// Test 1: RangingMock reports ping success → startup proceeds cleanly.
+//          FAILS because Safety ignores the mock and uses I²C directly.
+TEST(SafetyToFDelegationTest, TryPingSuccessProceeds) {
+    StrictMock<MockTrigger> trigger;
+    EXPECT_CALL(trigger, fire(false)).Times(AtLeast(1));
+
+    RangingMock ranging;
+    ranging.set_mock_ping_result(true);   // ToF is alive
+
+    Safety safety(nullptr, &ranging, &trigger);
+
+    auto result = safety.do_startup_check();
+
+    // When delegation works: can_proceed=true, !degraded, is_safe()=true
+    EXPECT_TRUE(result.can_proceed);
+    EXPECT_FALSE(result.degraded);
+    EXPECT_TRUE(safety.is_startup_ok());
+    EXPECT_FALSE(safety.is_startup_degraded());
+
+    // Watchdog starts expired with real Safety; kick it for a fair is_safe() check.
+    safety.kick_watchdog();
+    EXPECT_TRUE(safety.is_safe());
+}
+
+// Test 2: RangingMock reports ping failure → degraded mode.
+//          FAILS because Safety ignores the mock and uses I²C directly.
+TEST(SafetyToFDelegationTest, TryPingFailureDegrades) {
+    StrictMock<MockTrigger> trigger;
+    EXPECT_CALL(trigger, fire(false)).Times(AtLeast(1));
+
+    RangingMock ranging;
+    ranging.set_mock_ping_result(false);  // ToF is dead
+
+    Safety safety(nullptr, &ranging, &trigger);
+
+    auto result = safety.do_startup_check();
+
+    // When delegation works: can_proceed=true, degraded=true, is_safe()=false
+    EXPECT_TRUE(result.can_proceed);
+    EXPECT_TRUE(result.degraded);
+    EXPECT_TRUE(safety.is_startup_ok());
+    EXPECT_TRUE(safety.is_startup_degraded());
+
+    safety.kick_watchdog();
+    EXPECT_FALSE(safety.is_safe());
+}
+
+// Test 3: ToF comes back online after startup → run_once() recovers.
+//          FAILS because Safety's ping_tof_sensor_impl() doesn't
+//          delegate to RangingMock, so the ping-result change is invisible.
+TEST(SafetyToFDelegationTest, TryPingRecoveryInRunOnce) {
+    StrictMock<MockTrigger> trigger;
+    EXPECT_CALL(trigger, fire(false)).Times(AtLeast(1));
+
+    RangingMock ranging;
+    ranging.set_mock_ping_result(false);
+
+    Safety safety(nullptr, &ranging, &trigger);
+
+    // Startup: ToF dead → degraded
+    auto result = safety.do_startup_check();
+    EXPECT_TRUE(result.degraded);
+    EXPECT_FALSE(safety.is_safe());
+
+    // Simulate ToF sensor coming back online
+    ranging.set_mock_ping_result(true);
+
+    // run_once() should detect recovery and clear the degraded flag.
+    // Call multiple times to give the recovery path a chance.
+    for (int i = 0; i < 5; ++i) {
+        safety.run_once();
+    }
+
+    EXPECT_FALSE(safety.is_startup_degraded());
+
+    safety.kick_watchdog();
+    EXPECT_TRUE(safety.is_safe());
+}
+
+// Test 4: nullptr IRanging → graceful degradation, no crash.
+//          Currently passes because ping_tof_sensor_impl() doesn't
+//          dereference ranging_.  After refactoring to delegate,
+//          this test ensures the null-guard exists.
+TEST(SafetyToFDelegationTest, NullRangingGraceful) {
+    StrictMock<MockTrigger> trigger;
+    EXPECT_CALL(trigger, fire(false)).Times(AtLeast(1));
+
+    StartupResult result;
+    ASSERT_NO_THROW({
+        Safety safety(nullptr, nullptr, &trigger);
+        result = safety.do_startup_check();
+    });
+
+    // nullptr ranging should not crash; system enters degraded mode.
+    EXPECT_TRUE(result.degraded);
 }
 
 } // namespace
