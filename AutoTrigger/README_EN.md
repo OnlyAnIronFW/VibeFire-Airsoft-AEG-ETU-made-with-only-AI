@@ -68,7 +68,9 @@ Each frame (~33 ms at 30 FPS), the following pipeline executes:
                  └─────────────────────┘
 ```
 
-1. **YOLO Detection** — A YOLOv5n model running on the RK3566 NPU detects persons in the 640x640 camera frame at 30 FPS.
+1. **YOLO Detection** — A YOLOv5n model running on the RK3566 NPU detects persons in the 640x640 camera frame at 30 FPS target.
+
+   > ⚠️ **v1.0 status**: YOLO uses YOLOMock for development validation. Real RKNN inference is planned for v1.1.
 2. **Kalman Tracking** — An 8-DOF Kalman filter tracks the target's position, velocity, and acceleration across frames, handling occlusions with coast prediction.
 3. **Ranging** — Distance is obtained via a JRT TOF01 laser rangefinder (UART), fused with monocular fallback from bounding-box height for redundancy.
 4. **Ballistics** — A precomputed drop table (bilinear interpolation over 801 ranges x 3 muzzle velocities) compensates for foam-dart drag and gravity, outputting vertical offset and time-of-flight.
@@ -82,10 +84,9 @@ Each frame (~33 ms at 30 FPS), the following pipeline executes:
 
 | Parameter | Value |
 |-----------|-------|
-| Effective engagement range | 40-60 m |
-| Person detection range | >= 40 m |
-| Detection framerate | 30 FPS |
-| End-to-end latency | ~38-52 ms (2-frame pipeline) |
+| Ballistic calculation range | 0-80 m |
+| Detection framerate | 30 FPS (target, v1.0 uses Mock YOLO) |
+| End-to-end latency | ~130-150 ms (pipeline ~38ms + 3-frame consensus ~99ms) |
 | System power | ~5 W |
 | Battery life | ~10 hours (10,000 mAh power bank) |
 | Total weight | ~180 g |
