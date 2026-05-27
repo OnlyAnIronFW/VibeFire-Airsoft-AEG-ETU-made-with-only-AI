@@ -2,6 +2,8 @@
 
 #include "autotrigger/ballistics.h"
 #include "autotrigger/hal/idisplay.h"
+#include "autotrigger/hal/ifire_output.h"
+#include "autotrigger/hal/itrigger.h"
 #include "autotrigger/kalman_filter.h"
 #include "autotrigger/ranging.h"
 #include "autotrigger/safety.h"
@@ -20,7 +22,7 @@ namespace autotrigger {
 ///   5. Ballistics compute_aimpoint() → drop pixels + time-of-flight
 ///   6. Lead compensation from Kalman velocity estimate
 ///   7. Alignment check: |aim − crosshair| < ALIGN_THRESHOLD
-///   8. Trigger consensus update
+///   8. Trigger consensus update (reads ITrigger::is_held(), writes via IFireOutput)
 ///   9. Display render + safety watchdog kick
 ///
 /// After 3 consecutive missed detections the Kalman declares the target lost
@@ -64,6 +66,8 @@ class Pipeline {
   Ranging*        ranging_;
   IDisplay*       display_;
   Trigger*        trigger_;
+  ITrigger*       trigger_input_;   ///< physical trigger read (is_held)
+  IFireOutput*    fire_output_;    ///< fire signal write (fire)
   Safety*         safety_;
 
   // ── Constants ────────────────────────────────────────────────────────

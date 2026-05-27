@@ -1,4 +1,7 @@
-#pragma once
+#ifndef AUTOTRIGGER_SAFETY_H_
+#define AUTOTRIGGER_SAFETY_H_
+
+#include "autotrigger/hal/config.h"
 
 #include <chrono>
 #include <cstdint>
@@ -9,7 +12,7 @@ namespace autotrigger {
 // and are pulled in by safety.cpp only.
 class ICamera;
 class IRanging;
-class ITrigger;
+class IFireOutput;
 
 // ────────────────────────────────────────────────────────────
 // StartupResult
@@ -38,18 +41,19 @@ struct StartupResult {
  * All hardware-access methods are virtual protected so that
  * SafetyMock (below) can inject controlled values in x86 tests.
  *
- * On RK3566 the trigger output MUST be LOW at startup and
+ * On RK3566 the fire output MUST be LOW at startup and
  * remain LOW during any fault condition.
  */
 class Safety {
 public:
-    Safety(ICamera* camera, IRanging* ranging, ITrigger* trigger);
+    Safety(ICamera* camera, IRanging* ranging, IFireOutput* fire_output,
+           const PlatformConfig& config = PlatformConfig{});
     virtual ~Safety() = default;
 
     // ── Startup ──────────────────────────────────────────────
 
     /** Run power-on self-test. Returns can_proceed + degraded flags.
-     *  Calls trigger->fire(false) to guarantee LOW at startup. */
+     *  Calls fire_output->fire(false) to guarantee LOW at startup. */
     StartupResult do_startup_check();
 
     /** True after a successful startup check. */
@@ -111,8 +115,7 @@ public:
 protected:
     // ── Hardware abstraction layer (virtual for mocking) ──────
 
-    /** Read CPU temperature from /sys/class/thermal/thermal_zone0/temp.
-     *  Returns degrees Celsius. */
+    /** Read CPU temperature from sysfs thermal zone. */
     virtual float read_cpu_temperature_impl();
 
     /** Pet the hardware watchdog (/dev/watchdog). */
@@ -127,7 +130,7 @@ protected:
     /** Ping the ToF ranging sensor. Returns true if it responds. */
     virtual bool ping_tof_sensor_impl();
 
-    /** Verify that trigger GPIO defaults to LOW at power-on. */
+    /** Verify that fire output GPIO defaults to LOW at power-on. */
     virtual bool check_gpio_defaults_impl();
 
     /** Clock source — overridable for time-controlled tests. */
@@ -135,9 +138,10 @@ protected:
 
     // ── Members accessible by SafetyMock ─────────────────────
 
-    ICamera*  camera_;
-    IRanging* ranging_;
-    ITrigger* trigger_;
+    ICamera*       camera_;
+    IRanging*      ranging_;
+    IFireOutput*   fire_output_;
+    PlatformConfig platform_config_;
 
     bool startup_ok_        = false;
     bool startup_degraded_  = false;
@@ -170,7 +174,7 @@ protected:
  */
 class SafetyMock : public Safety {
 public:
-    SafetyMock(ICamera* camera, IRanging* ranging, ITrigger* trigger);
+    SafetyMock(ICamera* camera, IRanging* ranging, IFireOutput* fire_output);
 
     // ── Sensor injection ─────────────────────────────────────
 
@@ -225,3 +229,5 @@ private:
 };
 
 } // namespace autotrigger
+
+#endif // AUTOTRIGGER_SAFETY_H_

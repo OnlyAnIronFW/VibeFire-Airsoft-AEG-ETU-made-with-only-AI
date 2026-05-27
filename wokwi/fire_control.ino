@@ -1,11 +1,13 @@
 // ============================================================
 // 电动软弹枪火控单元 (FCU) v1.1
 // 平台: Arduino Nano (ATmega328P, 16MHz, 5V)
-// 电池: 6S LiPo (22.2V nominal, 25.2V full)
+// 电池: 2S-6S LiPo (auto-detect, 3.3V/cell cutoff)
 // 传感器: 897 霍尔开关 x2 (归位 + 快慢机)
 // 显示: SSD1306 0.96" OLED I2C
 // Wokwi 版: 无 NFC, 用滑动开关模拟霍尔
 // ============================================================
+
+#define WOKWI  // Enable Wokwi-specific guards (no NFC, no CV pin)
 
 #include <Wire.h>
 #include <Adafruit_SSD1306.h>
@@ -26,6 +28,9 @@
 #define PIN_MOTOR_BRAKE  A1  // 刹车 MOS
 #define PIN_LED           13  // 板载 LED
 #define PIN_BAT_ADC       A0  // 电池分压 ADC
+#ifndef WOKWI
+#define PIN_AUTO_FIRE    11  // AutoTrigger CV fire signal input (D11, INPUT_PULLUP, HIGH=fire)
+#endif
 
 // ============================================================
 // 参数常量
@@ -40,9 +45,9 @@
 #define MENU_TIMEOUT_MS     8000
 #define DISPLAY_REFRESH_MS  200
 
-#define CELL_COUNT          6
-#define BATTERY_LOW_CELL    3.30f
-#define BATTERY_LOW_V       (CELL_COUNT * BATTERY_LOW_CELL)
+#define MIN_CELL_V_MIN      3.70f   // minimum configurable cutoff
+#define MIN_CELL_V_MAX      4.20f   // maximum configurable cutoff
+#define MIN_CELL_V_STEP     0.05f   // adjustment step
 #define ADC_VREF            5.00f
 #define ADC_MAX             1024.0f
 #define VOLT_DIV_RATIO      11.0f
@@ -60,6 +65,9 @@
 #define EE_MODE_MAP_BASE    4     // 4 bytes
 #define EE_BURST_COUNTS     8     // 4 bytes
 #define EE_EMPTY_LOCK       12    // 1 byte
+#define EE_AUTOTRIGGER_ON   64    // bool: AutoTrigger mode enabled
+#define EE_MIN_CELL_V_LO    65    // uint16: min_cell_v * 100 (low byte)
+#define EE_MIN_CELL_V_HI    66    // uint16: min_cell_v * 100 (high byte)
 
 // ============================================================
 // 枚举
@@ -68,7 +76,8 @@ enum FireMode  { SAFE = 0, SEMI, BINARY, BURST, AUTO };
 enum FCUState  { IDLE, FIRING, PRECOMP, BRAKING, DONE };
 enum MenuPage  { MENU_OFF, MENU_MAIN, MENU_PRE_COMP,
                  MENU_EMPTY_LOCK, MENU_MODE_MAP, MENU_AMMO,
-                 MENU_BATTERY, MENU_EDIT_BURST };
+                 MENU_BATTERY, MENU_EDIT_BURST, MENU_AUTOTRIGGER,
+                 MENU_CELL_CUTOFF };
 enum MagState  { MAG_ABSENT, MAG_PRESENT };
 
 const char* MODE_NAMES[] = {"SAFE", "SEMI", "BIN", "BURST", "AUTO"};
@@ -114,6 +123,9 @@ bool     empty_lock = true;               // 无弹锁定开关
 float    rof_rps = 0.0;                   // 射速 (发/秒)
 unsigned long last_home_time = 0;         // 上次归位时间
 FireMode mode_map[4] = { SAFE, SEMI, BINARY, AUTO };  // 0=保险 1=单发 2=双行程 3=连发
+uint8_t cell_count = 6;          // auto-detected at boot (2-6S), used for low-voltage calc
+float   min_cell_v = 3.30f;     // configurable low-voltage cutoff per cell (EEPROM)
+bool autotrigger_on = false;   // AutoTrigger CV mode toggle
 
 // --- 按钮 (带时间戳的去抖状态机) ---
 struct Button {
@@ -196,6 +208,31 @@ void nfc_init() { /* Wokwi: no NFC hardware */ }
 void nfc_poll() { /* Wokwi: mag always present */ }
 
 // ============================================================
+// 开机自动检测电池串联电芯数 (2S-6S)
+// ============================================================
+static void detect_cell_count() {
+  float sum = 0;
+  for (int i = 0; i < 5; i++) {
+    sum += analogRead(PIN_BAT_ADC);
+    delay(10);
+  }
+  float avg_adc = sum / 5.0f;
+  float v = (avg_adc * ADC_VREF / ADC_MAX) * VOLT_DIV_RATIO;
+
+  if      (v > 17.0f) cell_count = 6;
+  else if (v > 14.0f) cell_count = 5;
+  else if (v > 11.0f) cell_count = 4;
+  else if (v >  8.0f) cell_count = 3;
+  else                  cell_count = 2;
+
+  Serial.print(F("  Battery: "));
+  Serial.print(v, 1);
+  Serial.print(F("V, "));
+  Serial.print(cell_count);
+  Serial.println(F("S detected"));
+}
+
+// ============================================================
 // 初始化
 // ============================================================
 void setup() {
@@ -210,6 +247,9 @@ void setup() {
   pinMode(PIN_BTN_UP,     INPUT_PULLUP);
   pinMode(PIN_BTN_DOWN,   INPUT_PULLUP);
   pinMode(PIN_BTN_SEL,    INPUT_PULLUP);
+#ifndef WOKWI
+  pinMode(PIN_AUTO_FIRE,  INPUT_PULLUP);
+#endif
   pinMode(PIN_LED,        OUTPUT);
   digitalWrite(PIN_LED, LOW);
 
@@ -232,6 +272,7 @@ void setup() {
   nfc_init();
 
   load_eeprom();
+  detect_cell_count();
   attachInterrupt(digitalPinToInterrupt(PIN_HOME), isr_home, FALLING);
 
   delay(300);
@@ -277,6 +318,13 @@ void read_sensors() {
   trigger_prev = trigger_now;
   trigger_now = (digitalRead(PIN_TRIGGER) == LOW);
 
+  // Read external AutoTrigger fire signal (HIGH = fire, via INPUT_PULLUP so default LOW)
+  // In auto mode, external signal replaces manual trigger
+#ifndef WOKWI
+  bool auto_fire = autotrigger_on && (digitalRead(PIN_AUTO_FIRE) == HIGH);
+  trigger_now = trigger_now || auto_fire;
+#endif
+
   // 快慢机: 2-bit Gray-like 编码, 带稳定去抖
   uint8_t raw = 0;
   if (digitalRead(PIN_SELECTOR_A) == LOW) raw |= 0b01;
@@ -303,7 +351,7 @@ void read_sensors() {
   int adc = analogRead(PIN_BAT_ADC);
   float inst_v = (adc * ADC_VREF / ADC_MAX) * VOLT_DIV_RATIO;
   bat_voltage = VOLT_FILTER_ALPHA * inst_v + (1.0f - VOLT_FILTER_ALPHA) * bat_voltage;
-  bat_low = (bat_voltage < BATTERY_LOW_V && bat_voltage > 5.0f);
+  bat_low = (bat_voltage < cell_count * min_cell_v && bat_voltage > 5.0f);
   // (bat_voltage > 5 防止未接电池时的误报)
 }
 
@@ -328,25 +376,38 @@ void run_fcu() {
                  && !bat_low
                  && !error_stall;
 
+    // Compute fire command: manual trigger edge OR auto-trigger level
+    bool manual_fire_edge = trigger_now && !trigger_prev;
+#ifndef WOKWI
+    bool auto_fire_sustained = autotrigger_on && (digitalRead(PIN_AUTO_FIRE) == HIGH);
+#else
+    bool auto_fire_sustained = false;  // Wokwi: no CV pin, always LOW
+#endif
+
     if (can_fire) {
+      // Determine if we should start a cycle
+      bool should_start = false;
       if (fire_mode == BINARY) {
-        // 双行程: 扣下击发一发, 松开击发第二发 (松开不依赖边沿, 防止cycle中丢沿)
-        if (trigger_now && !trigger_prev) {
-          binary_armed = true;
-          start_cycle();
-        } else if (!trigger_now && binary_armed) {
-          binary_armed = false;
-          start_cycle();
+        // 双行程: manual or auto edge for both pull and release
+        should_start = (manual_fire_edge || (auto_fire_sustained && !binary_armed)) ||
+                       (!trigger_now && binary_armed);
+        if (should_start) {
+          if (trigger_now && !trigger_prev) binary_armed = true;
+          else if (!trigger_now && binary_armed) binary_armed = false;
         }
-      } else if (fire_mode == BURST && trigger_now && !trigger_prev) {
-        // x连发: 使用当前档位的连发数
-        burst_remaining = burst_counts[selector_stable];
-        start_cycle();
+      } else if (fire_mode == BURST) {
+        // x连发: manual edge or auto edge starts burst, burst runs to completion
+        if (manual_fire_edge || (auto_fire_sustained && burst_remaining == 0)) {
+          burst_remaining = burst_counts[selector_stable];
+          should_start = true;
+        }
       } else {
-        // 单发/连发: 扣下击发
-        if (trigger_now && !trigger_prev) {
-          start_cycle();
-        }
+        // SEMI: manual edge only; AUTO: edge or sustained level for auto_fire
+        should_start = manual_fire_edge || (auto_fire_sustained && fire_mode == AUTO);
+      }
+
+      if (should_start) {
+        start_cycle();
       }
     } else {
       binary_armed = false;
@@ -370,9 +431,16 @@ void run_fcu() {
       burst_remaining = burst_counts[selector_stable];
     }
 
-    // 连发模式下松扳机 → 标记等待归位刹车
-    if (fire_mode == AUTO && !trigger_now) {
-      auto_brake_pending = true;
+    // 连发模式下松扳机(手动或自动) → 标记等待归位刹车
+    {
+#ifndef WOKWI
+      bool auto_off = autotrigger_on && (digitalRead(PIN_AUTO_FIRE) != HIGH);
+#else
+      bool auto_off = false;  // Wokwi: no CV pin
+#endif
+      if (fire_mode == AUTO && (!trigger_now || auto_off)) {
+        auto_brake_pending = true;
+      }
     }
 
     if (home_isr_flag) {
@@ -550,16 +618,18 @@ void run_menu() {
   switch (menu_page) {
 
   case MENU_MAIN: {
-    const int N = 5;
+    const int N = 7;
     if (up)   menu_cursor = (menu_cursor - 1 + N) % N;
     if (down) menu_cursor = (menu_cursor + 1) % N;
     if (trig) {
       switch (menu_cursor) {
-        case 0: menu_page = MENU_PRE_COMP;   break;
-        case 1: menu_page = MENU_EMPTY_LOCK; break;
-        case 2: menu_page = MENU_MODE_MAP;   break;
-        case 3: menu_page = MENU_AMMO;       break;
-        case 4: menu_page = MENU_BATTERY;    break;
+        case 0: menu_page = MENU_PRE_COMP;    break;
+        case 1: menu_page = MENU_EMPTY_LOCK;  break;
+        case 2: menu_page = MENU_MODE_MAP;    break;
+        case 3: menu_page = MENU_AMMO;        break;
+        case 4: menu_page = MENU_BATTERY;     break;
+        case 5: menu_page = MENU_AUTOTRIGGER; break;
+        case 6: menu_page = MENU_CELL_CUTOFF; break;
       }
     }
     break;
@@ -631,6 +701,24 @@ void run_menu() {
     break;
   }
 
+  case MENU_AUTOTRIGGER: {
+    if (btn_rose(btn_sel)) { autotrigger_on = !autotrigger_on; }
+    break;
+  }
+
+  case MENU_CELL_CUTOFF: {
+    int delta = 0;
+    if (up || up_rep)       delta = +1;
+    if (down || down_rep)   delta = -1;
+    if (delta != 0) {
+      float v = min_cell_v + delta * MIN_CELL_V_STEP;
+      if (v < MIN_CELL_V_MIN) v = MIN_CELL_V_MIN;
+      if (v > MIN_CELL_V_MAX) v = MIN_CELL_V_MAX;
+      min_cell_v = v;
+    }
+    break;
+  }
+
   default: break;
   }
 }
@@ -656,7 +744,7 @@ void draw_main() {
 
   // ── 顶栏: 电压 | ROF/预压 | 状态 ──
   oled.setCursor(0, 0);
-  if (bat_low) oled.print("LOW!");
+  if (bat_low) oled.print("SD!");
   else { snprintf(b, sizeof(b), "%.1fV", bat_voltage); oled.print(b); }
 
   oled.setCursor(52, 0);
@@ -671,7 +759,7 @@ void draw_main() {
 
   oled.setCursor(108, 0);
   if (error_stall)        oled.print("ERR");
-  else if (bat_low)       oled.print("LOW");
+  else if (bat_low)       oled.print("SD");
   else if (cycle_active)  oled.print(">>");
   else                    oled.print("OK");
 
@@ -724,6 +812,8 @@ void draw_menu() {
     draw_menuitem(2, "Mode Config");
     draw_menuitem(3, "Ammo Count");
     draw_menuitem(4, "Battery Info");
+    draw_menuitem(5, "AutoTrigger");
+    draw_menuitem(6, "Cell Cutoff");
     oled.println("");
     oled.println("TRIG=Sel SEL=Back");
     break;
@@ -803,12 +893,56 @@ void draw_menu() {
     oled.print("Total: ");
     oled.print(bat_voltage, 1);
     oled.println("V");
-    float cv = bat_voltage / CELL_COUNT;
+    float cv = bat_voltage / cell_count;
+    oled.print("Cells: ");
+    oled.print(cell_count);
+    oled.println("S");
     oled.print("Cell:  ");
     oled.print(cv, 2);
     oled.println("V");
+    oled.print("Cutoff:");
+    oled.print(min_cell_v, 2);
+    oled.println("V/cell");
     oled.println("");
     oled.println("SEL=Back");
+    break;
+  }
+
+  case MENU_AUTOTRIGGER: {
+    oled.println("= AUTOTRIGGER =");
+    oled.println("");
+    oled.print("TRIGGER: ");
+    oled.println(autotrigger_on ? "AUTO" : "MANUAL");
+    oled.println("");
+    oled.println(autotrigger_on ? "D11 CV signal active" : "Manual trigger only");
+    oled.println("");
+    oled.println("SEL=Toggle Back=Exit");
+    break;
+  }
+
+  case MENU_CELL_CUTOFF: {
+    oled.println("= CELL CUTOFF =");
+    oled.println("");
+    float cv = bat_voltage / cell_count;
+    oled.print("Now:  ");
+    oled.print(cv, 2);
+    oled.println("V/cell");
+    oled.println("");
+    oled.print("Stop: ");
+    oled.print(min_cell_v, 2);
+    oled.print("V (");
+    oled.print(cell_count);
+    oled.print("S=");
+    oled.print(cell_count * min_cell_v, 1);
+    oled.println("V)");
+    int bx = 0, bw = 100;
+    oled.drawRect(bx, 54, bw, 8, SSD1306_WHITE);
+    int pw = (int)((min_cell_v - MIN_CELL_V_MIN) / (MIN_CELL_V_MAX - MIN_CELL_V_MIN) * (bw - 2));
+    if (pw > 0) oled.fillRect(bx, 54, pw, 8, SSD1306_WHITE);
+    oled.println("");
+    oled.print(cv < min_cell_v ? " TRIGGER LOCKED" : " TRIGGER OK");
+    oled.println("");
+    oled.println("UP/DN=0.05V SEL=Back");
     break;
   }
 
@@ -861,6 +995,13 @@ void load_eeprom() {
     if (bc >= 2 && bc <= 10) burst_counts[i] = bc;
   }
   empty_lock = EEPROM.read(EE_EMPTY_LOCK) != 0;
+  autotrigger_on = EEPROM.read(EE_AUTOTRIGGER_ON) != 0;
+
+  { // min_cell_v: stored as uint16 (value * 100)
+    uint16_t raw = ((uint16_t)EEPROM.read(EE_MIN_CELL_V_HI) << 8) | EEPROM.read(EE_MIN_CELL_V_LO);
+    float v = raw * 0.01f;
+    if (v >= MIN_CELL_V_MIN && v <= MIN_CELL_V_MAX) min_cell_v = v;
+  }
 }
 
 void save_eeprom() {
@@ -875,4 +1016,11 @@ void save_eeprom() {
     EEPROM.write(EE_BURST_COUNTS + i, burst_counts[i]);
   }
   EEPROM.write(EE_EMPTY_LOCK, empty_lock ? 1 : 0);
+  EEPROM.write(EE_AUTOTRIGGER_ON, autotrigger_on ? 1 : 0);
+
+  { // min_cell_v: stored as uint16 (value * 100)
+    uint16_t raw = (uint16_t)(min_cell_v * 100.0f + 0.5f);
+    EEPROM.write(EE_MIN_CELL_V_LO, raw & 0xFF);
+    EEPROM.write(EE_MIN_CELL_V_HI, raw >> 8);
+  }
 }

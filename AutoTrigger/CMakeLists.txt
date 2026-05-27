@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(autotrigger VERSION 1.0.0 LANGUAGES CXX)
+project(autotrigger VERSION 1.1.0 LANGUAGES CXX)
 
 # ---- Build configuration ----
 set(CMAKE_CXX_STANDARD 17)
@@ -101,7 +101,9 @@ if(OpenCV_FOUND)
       OpenCV::calib3d
   )
 endif()
-target_include_directories(autotrigger_core SYSTEM PUBLIC ${EIGEN3_INCLUDE_DIR})
+target_include_directories(autotrigger_core SYSTEM PUBLIC
+  $<BUILD_INTERFACE:${EIGEN3_INCLUDE_DIR}>
+)
 
 if(SDL2_FOUND)
   target_link_libraries(autotrigger_core PUBLIC ${SDL2_LIBRARIES})
@@ -121,3 +123,25 @@ target_link_libraries(autotrigger PRIVATE autotrigger_core)
 if(BUILD_TESTING)
   add_subdirectory(tests)
 endif()
+
+# ---- Install ----
+include(CMakePackageConfigHelpers)
+include(GNUInstallDirs)
+
+install(TARGETS autotrigger_core
+  EXPORT autotriggerConfig
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
+
+install(DIRECTORY include/autotrigger
+  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+  FILES_MATCHING PATTERN "*.h"
+)
+
+install(EXPORT autotriggerConfig
+  FILE autotriggerConfig.cmake
+  NAMESPACE autotrigger::
+  DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/autotrigger
+)

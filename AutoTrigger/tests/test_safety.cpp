@@ -1,8 +1,8 @@
 #include "autotrigger/safety.h"
 #include "autotrigger/ranging.h"
 
-// HAL interface needed for MockTrigger definition
-#include "autotrigger/hal/itrigger.h"
+// HAL interface needed for MockFireOutput definition
+#include "autotrigger/hal/ifire_output.h"
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -13,16 +13,15 @@ using testing::AtLeast;
 using testing::StrictMock;
 
 // ────────────────────────────────────────────────────────────
-// GoogleMock for ITrigger — needed to verify trigger stays LOW
+// GoogleMock for IFireOutput — needed to verify fire stays LOW
 // ────────────────────────────────────────────────────────────
 namespace {
 
 using namespace autotrigger;
 
-class MockTrigger : public ITrigger {
+class MockFireOutput : public IFireOutput {
 public:
     MOCK_METHOD(bool, init, (), (override));
-    MOCK_METHOD(bool, is_held, (), (override));
     MOCK_METHOD(void, fire, (bool), (override));
     MOCK_METHOD(void, release, (), (override));
 };
@@ -32,11 +31,11 @@ public:
 // ────────────────────────────────────────────────────────────
 
 TEST(SafetyStartupTest, AllOk_Proceeds) {
-    StrictMock<MockTrigger> trigger;
-    // trigger->fire(false) is called during startup
-    EXPECT_CALL(trigger, fire(false)).Times(testing::AtLeast(1));
+    StrictMock<MockFireOutput> fire_output;
+    // fire_output->fire(false) is called during startup
+    EXPECT_CALL(fire_output, fire(false)).Times(testing::AtLeast(1));
 
-    SafetyMock safety(nullptr, nullptr, &trigger);
+    SafetyMock safety(nullptr, nullptr, &fire_output);
 
     auto result = safety.do_startup_check();
 
@@ -48,10 +47,10 @@ TEST(SafetyStartupTest, AllOk_Proceeds) {
 }
 
 TEST(SafetyStartupTest, CameraAbsent_ReturnsFalse) {
-    StrictMock<MockTrigger> trigger;
-    EXPECT_CALL(trigger, fire(false)).Times(testing::AtLeast(1));
+    StrictMock<MockFireOutput> fire_output;
+    EXPECT_CALL(fire_output, fire(false)).Times(testing::AtLeast(1));
 
-    SafetyMock safety(nullptr, nullptr, &trigger);
+    SafetyMock safety(nullptr, nullptr, &fire_output);
     safety.set_mock_camera_present(false);
 
     auto result = safety.do_startup_check();
@@ -61,10 +60,10 @@ TEST(SafetyStartupTest, CameraAbsent_ReturnsFalse) {
 }
 
 TEST(SafetyStartupTest, ToFTimeout_DegradedMode) {
-    StrictMock<MockTrigger> trigger;
-    EXPECT_CALL(trigger, fire(false)).Times(testing::AtLeast(1));
+    StrictMock<MockFireOutput> fire_output;
+    EXPECT_CALL(fire_output, fire(false)).Times(testing::AtLeast(1));
 
-    SafetyMock safety(nullptr, nullptr, &trigger);
+    SafetyMock safety(nullptr, nullptr, &fire_output);
     safety.set_mock_tof_healthy(false);
 
     auto result = safety.do_startup_check();
@@ -73,15 +72,15 @@ TEST(SafetyStartupTest, ToFTimeout_DegradedMode) {
     EXPECT_TRUE(result.degraded);
     EXPECT_TRUE(safety.is_startup_ok());
     EXPECT_TRUE(safety.is_startup_degraded());
-    // Trigger stays LOW — is_safe() is false in degraded mode
+    // Fire output stays LOW — is_safe() is false in degraded mode
     EXPECT_FALSE(safety.is_safe());
 }
 
 TEST(SafetyStartupTest, ToFTimeout_RecoverViaRunOnce) {
-    StrictMock<MockTrigger> trigger;
-    EXPECT_CALL(trigger, fire(false)).Times(testing::AtLeast(1));
+    StrictMock<MockFireOutput> fire_output;
+    EXPECT_CALL(fire_output, fire(false)).Times(testing::AtLeast(1));
 
-    SafetyMock safety(nullptr, nullptr, &trigger);
+    SafetyMock safety(nullptr, nullptr, &fire_output);
     safety.set_mock_tof_healthy(false);
 
     auto result = safety.do_startup_check();
@@ -97,10 +96,10 @@ TEST(SafetyStartupTest, ToFTimeout_RecoverViaRunOnce) {
 }
 
 TEST(SafetyStartupTest, GpioDefaultsFail_ReturnsFalse) {
-    StrictMock<MockTrigger> trigger;
-    EXPECT_CALL(trigger, fire(false)).Times(testing::AtLeast(1));
+    StrictMock<MockFireOutput> fire_output;
+    EXPECT_CALL(fire_output, fire(false)).Times(testing::AtLeast(1));
 
-    SafetyMock safety(nullptr, nullptr, &trigger);
+    SafetyMock safety(nullptr, nullptr, &fire_output);
     safety.set_mock_gpio_defaults_ok(false);
 
     auto result = safety.do_startup_check();
@@ -114,8 +113,8 @@ TEST(SafetyStartupTest, GpioDefaultsFail_ReturnsFalse) {
 // ────────────────────────────────────────────────────────────
 
 TEST(SafetyThermalTest, NormalTemp_NotThrottled) {
-    StrictMock<MockTrigger> trigger;
-    SafetyMock safety(nullptr, nullptr, &trigger);
+    StrictMock<MockFireOutput> fire_output;
+    SafetyMock safety(nullptr, nullptr, &fire_output);
     safety.set_mock_temperature(50.0f);
 
     safety.monitor_thermal();
@@ -125,8 +124,8 @@ TEST(SafetyThermalTest, NormalTemp_NotThrottled) {
 }
 
 TEST(SafetyThermalTest, AboveThreshold_Throttles) {
-    StrictMock<MockTrigger> trigger;
-    SafetyMock safety(nullptr, nullptr, &trigger);
+    StrictMock<MockFireOutput> fire_output;
+    SafetyMock safety(nullptr, nullptr, &fire_output);
     safety.set_mock_temperature(90.0f);
 
     safety.monitor_thermal();
@@ -135,8 +134,8 @@ TEST(SafetyThermalTest, AboveThreshold_Throttles) {
 }
 
 TEST(SafetyThermalTest, ExactlyAtThreshold_Throttles) {
-    StrictMock<MockTrigger> trigger;
-    SafetyMock safety(nullptr, nullptr, &trigger);
+    StrictMock<MockFireOutput> fire_output;
+    SafetyMock safety(nullptr, nullptr, &fire_output);
     safety.set_mock_temperature(Safety::kThrottleOnTemp);
 
     safety.monitor_thermal();
@@ -145,8 +144,8 @@ TEST(SafetyThermalTest, ExactlyAtThreshold_Throttles) {
 }
 
 TEST(SafetyThermalTest, Hysteresis_ClearsBelowOffTemp) {
-    StrictMock<MockTrigger> trigger;
-    SafetyMock safety(nullptr, nullptr, &trigger);
+    StrictMock<MockFireOutput> fire_output;
+    SafetyMock safety(nullptr, nullptr, &fire_output);
 
     // Heat up
     safety.set_mock_temperature(90.0f);
@@ -169,8 +168,8 @@ TEST(SafetyThermalTest, Hysteresis_ClearsBelowOffTemp) {
 // ────────────────────────────────────────────────────────────
 
 TEST(SafetyWatchdogTest, KickThenCheck_Alive) {
-    StrictMock<MockTrigger> trigger;
-    SafetyMock safety(nullptr, nullptr, &trigger);
+    StrictMock<MockFireOutput> fire_output;
+    SafetyMock safety(nullptr, nullptr, &fire_output);
 
     safety.kick_watchdog();
 
@@ -179,8 +178,8 @@ TEST(SafetyWatchdogTest, KickThenCheck_Alive) {
 }
 
 TEST(SafetyWatchdogTest, NotKicked_ExpiresAfter100ms) {
-    StrictMock<MockTrigger> trigger;
-    SafetyMock safety(nullptr, nullptr, &trigger);
+    StrictMock<MockFireOutput> fire_output;
+    SafetyMock safety(nullptr, nullptr, &fire_output);
 
     safety.kick_watchdog();
     EXPECT_TRUE(safety.is_watchdog_alive());
@@ -192,8 +191,8 @@ TEST(SafetyWatchdogTest, NotKicked_ExpiresAfter100ms) {
 }
 
 TEST(SafetyWatchdogTest, KickWithinWindow_StaysAlive) {
-    StrictMock<MockTrigger> trigger;
-    SafetyMock safety(nullptr, nullptr, &trigger);
+    StrictMock<MockFireOutput> fire_output;
+    SafetyMock safety(nullptr, nullptr, &fire_output);
 
     safety.kick_watchdog();
     safety.advance_time_ms(50);  // Still within 100 ms
@@ -208,8 +207,8 @@ TEST(SafetyWatchdogTest, KickWithinWindow_StaysAlive) {
 }
 
 TEST(SafetyWatchdogTest, MsSinceLastKick) {
-    StrictMock<MockTrigger> trigger;
-    SafetyMock safety(nullptr, nullptr, &trigger);
+    StrictMock<MockFireOutput> fire_output;
+    SafetyMock safety(nullptr, nullptr, &fire_output);
 
     safety.kick_watchdog();
     EXPECT_EQ(safety.ms_since_last_watchdog_kick().count(), 0);
@@ -223,8 +222,8 @@ TEST(SafetyWatchdogTest, MsSinceLastKick) {
 // ────────────────────────────────────────────────────────────
 
 TEST(SafetyHeartbeatTest, TogglesAt1Hz) {
-    StrictMock<MockTrigger> trigger;
-    SafetyMock safety(nullptr, nullptr, &trigger);
+    StrictMock<MockFireOutput> fire_output;
+    SafetyMock safety(nullptr, nullptr, &fire_output);
 
     // First call → toggle ON
     safety.heartbeat();
@@ -247,8 +246,8 @@ TEST(SafetyHeartbeatTest, TogglesAt1Hz) {
 }
 
 TEST(SafetyHeartbeatTest, DoesNotToggleBeforePeriod) {
-    StrictMock<MockTrigger> trigger;
-    SafetyMock safety(nullptr, nullptr, &trigger);
+    StrictMock<MockFireOutput> fire_output;
+    SafetyMock safety(nullptr, nullptr, &fire_output);
 
     safety.heartbeat();  // toggles ON
     EXPECT_TRUE(safety.heartbeat_state());
@@ -261,8 +260,8 @@ TEST(SafetyHeartbeatTest, DoesNotToggleBeforePeriod) {
 }
 
 TEST(SafetyHeartbeatTest, TogglesAtBoundary) {
-    StrictMock<MockTrigger> trigger;
-    SafetyMock safety(nullptr, nullptr, &trigger);
+    StrictMock<MockFireOutput> fire_output;
+    SafetyMock safety(nullptr, nullptr, &fire_output);
 
     safety.heartbeat();  // ON
 
@@ -282,10 +281,10 @@ TEST(SafetyHeartbeatTest, TogglesAtBoundary) {
 // ────────────────────────────────────────────────────────────
 
 TEST(SafetyIntegrationTest, IsSafe_OnlyTrueWhenAllOk) {
-    StrictMock<MockTrigger> trigger;
-    EXPECT_CALL(trigger, fire(false)).Times(testing::AtLeast(1));
+    StrictMock<MockFireOutput> fire_output;
+    EXPECT_CALL(fire_output, fire(false)).Times(testing::AtLeast(1));
 
-    SafetyMock safety(nullptr, nullptr, &trigger);
+    SafetyMock safety(nullptr, nullptr, &fire_output);
 
     // Before startup: not safe
     EXPECT_FALSE(safety.is_safe());
@@ -314,8 +313,8 @@ TEST(SafetyIntegrationTest, IsSafe_OnlyTrueWhenAllOk) {
 }
 
 TEST(SafetyIntegrationTest, RunOnce_DoesNotAutoKickWatchdog) {
-    StrictMock<MockTrigger> trigger;
-    SafetyMock safety(nullptr, nullptr, &trigger);
+    StrictMock<MockFireOutput> fire_output;
+    SafetyMock safety(nullptr, nullptr, &fire_output);
 
     safety.kick_watchdog();
     safety.advance_time_ms(50);
@@ -340,13 +339,13 @@ TEST(SafetyIntegrationTest, RunOnce_DoesNotAutoKickWatchdog) {
 // Test 1: RangingMock reports ping success → startup proceeds cleanly.
 //          FAILS because Safety ignores the mock and uses I²C directly.
 TEST(SafetyToFDelegationTest, TryPingSuccessProceeds) {
-    StrictMock<MockTrigger> trigger;
-    EXPECT_CALL(trigger, fire(false)).Times(AtLeast(1));
+    StrictMock<MockFireOutput> fire_output;
+    EXPECT_CALL(fire_output, fire(false)).Times(AtLeast(1));
 
     RangingMock ranging;
     ranging.set_mock_ping_result(true);   // ToF is alive
 
-    Safety safety(nullptr, &ranging, &trigger);
+    Safety safety(nullptr, &ranging, &fire_output);
 
     auto result = safety.do_startup_check();
 
@@ -364,13 +363,13 @@ TEST(SafetyToFDelegationTest, TryPingSuccessProceeds) {
 // Test 2: RangingMock reports ping failure → degraded mode.
 //          FAILS because Safety ignores the mock and uses I²C directly.
 TEST(SafetyToFDelegationTest, TryPingFailureDegrades) {
-    StrictMock<MockTrigger> trigger;
-    EXPECT_CALL(trigger, fire(false)).Times(AtLeast(1));
+    StrictMock<MockFireOutput> fire_output;
+    EXPECT_CALL(fire_output, fire(false)).Times(AtLeast(1));
 
     RangingMock ranging;
     ranging.set_mock_ping_result(false);  // ToF is dead
 
-    Safety safety(nullptr, &ranging, &trigger);
+    Safety safety(nullptr, &ranging, &fire_output);
 
     auto result = safety.do_startup_check();
 
@@ -388,13 +387,13 @@ TEST(SafetyToFDelegationTest, TryPingFailureDegrades) {
 //          FAILS because Safety's ping_tof_sensor_impl() doesn't
 //          delegate to RangingMock, so the ping-result change is invisible.
 TEST(SafetyToFDelegationTest, TryPingRecoveryInRunOnce) {
-    StrictMock<MockTrigger> trigger;
-    EXPECT_CALL(trigger, fire(false)).Times(AtLeast(1));
+    StrictMock<MockFireOutput> fire_output;
+    EXPECT_CALL(fire_output, fire(false)).Times(AtLeast(1));
 
     RangingMock ranging;
     ranging.set_mock_ping_result(false);
 
-    Safety safety(nullptr, &ranging, &trigger);
+    Safety safety(nullptr, &ranging, &fire_output);
 
     // Startup: ToF dead → degraded
     auto result = safety.do_startup_check();
@@ -421,12 +420,12 @@ TEST(SafetyToFDelegationTest, TryPingRecoveryInRunOnce) {
 //          dereference ranging_.  After refactoring to delegate,
 //          this test ensures the null-guard exists.
 TEST(SafetyToFDelegationTest, NullRangingGraceful) {
-    StrictMock<MockTrigger> trigger;
-    EXPECT_CALL(trigger, fire(false)).Times(AtLeast(1));
+    StrictMock<MockFireOutput> fire_output;
+    EXPECT_CALL(fire_output, fire(false)).Times(AtLeast(1));
 
     StartupResult result;
     ASSERT_NO_THROW({
-        Safety safety(nullptr, nullptr, &trigger);
+        Safety safety(nullptr, nullptr, &fire_output);
         result = safety.do_startup_check();
     });
 

@@ -1,6 +1,7 @@
 #include "autotrigger/safety.h"
+#include "autotrigger/hal/config.h"
+#include "autotrigger/hal/ifire_output.h"
 #include "autotrigger/hal/iranging.h"
-#include "autotrigger/hal/itrigger.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -11,6 +12,7 @@
 #ifndef MOCK_MODE
 #include <unistd.h>     // ::open, ::write, ::close
 #include <fcntl.h>      // O_WRONLY
+#include <gpiod.h>
 #endif
 
 namespace autotrigger {
@@ -19,10 +21,12 @@ namespace autotrigger {
 // Safety  —  construction
 // ════════════════════════════════════════════════════════════
 
-Safety::Safety(ICamera* camera, IRanging* ranging, ITrigger* trigger)
+Safety::Safety(ICamera* camera, IRanging* ranging, IFireOutput* fire_output,
+               const PlatformConfig& config)
     : camera_(camera),
       ranging_(ranging),
-      trigger_(trigger) {
+      fire_output_(fire_output),
+      platform_config_(config) {
     // NOTE: last_watchdog_kick_ and last_heartbeat_toggle_ use their
     // default member initialisers (epoch).  Do NOT call now_impl() here
     // — it is virtual and would dispatch to Safety::now_impl() even when
@@ -37,8 +41,8 @@ Safety::Safety(ICamera* camera, IRanging* ranging, ITrigger* trigger)
 StartupResult Safety::do_startup_check() {
     StartupResult result;
 
-    // Safety invariant: trigger MUST be LOW at startup.
-    if (trigger_) trigger_->fire(false);
+    // Safety invariant: fire output MUST be LOW at startup.
+    if (fire_output_) fire_output_->fire(false);
 
     // --- Hard failures: camera absent or GPIO defaults wrong ---
     if (!check_camera_present_impl()) {
@@ -134,7 +138,7 @@ void Safety::heartbeat() {
 bool Safety::is_safe() const {
     // Runtime ToF health: if ranging was healthy at startup but fails mid-operation,
     // is_safe() detects it. nullptr ranging (tests) or healthy rangefinder OK.
-    // startup_degraded_ → trigger stays LOW regardless of runtime health.
+    // startup_degraded_ → fire output stays LOW regardless of runtime health.
     bool tof_ok = !ranging_ || ranging_->is_healthy();
     return startup_ok_ && !startup_degraded_ && !throttled_ && is_watchdog_alive() && tof_ok;
 }
@@ -147,8 +151,12 @@ float Safety::read_cpu_temperature_impl() {
 #ifdef MOCK_MODE
     return 45.0f;  // benign default for x86 development
 #else
-    // RK3566: /sys/class/thermal/thermal_zone0/temp  → millidegrees
-    FILE* f = fopen("/sys/class/thermal/thermal_zone0/temp", "r");
+    // Use the thermal zone path from PlatformConfig
+    std::string tz_path = platform_config_.thermal_zone;
+    if (tz_path.empty()) {
+        tz_path = "/sys/class/thermal/thermal_zone0/temp";
+    }
+    FILE* f = fopen(tz_path.c_str(), "r");
     if (!f) return 40.0f;  // safe fallback
     int millidegrees = 40000;
     if (fscanf(f, "%d", &millidegrees) != 1) {
@@ -161,12 +169,13 @@ float Safety::read_cpu_temperature_impl() {
 
 void Safety::write_watchdog_impl() {
 #ifndef MOCK_MODE
-    // RK3566: /dev/watchdog — a single write pets the watchdog.
+    // Use the watchdog device path from PlatformConfig.
     // Opening the device is typically done once at init; here we
     // assume it was already opened.  This method just pets it.
     static int wd_fd = -1;
     if (wd_fd < 0) {
-        wd_fd = ::open("/dev/watchdog", O_WRONLY);
+        const std::string& wd = platform_config_.watchdog_device;
+        wd_fd = ::open(wd.c_str(), O_WRONLY);
     }
     if (wd_fd >= 0) {
         // Any write (even a single byte) pets the watchdog.
@@ -188,9 +197,9 @@ void Safety::set_heartbeat_gpio_impl(bool /*state*/) {
 
 bool Safety::check_camera_present_impl() {
 #ifndef MOCK_MODE
-    // RK3566: try to open the camera V4L2 device.
-    // The OV5647 sensor typically appears as /dev/video0.
-    FILE* f = fopen("/dev/video0", "r");
+    // Use the camera device path from PlatformConfig
+    const std::string& cam = platform_config_.camera_device;
+    FILE* f = fopen(cam.c_str(), "r");
     if (!f) return false;
     fclose(f);
     return true;
@@ -207,12 +216,36 @@ bool Safety::ping_tof_sensor_impl() {
 
 bool Safety::check_gpio_defaults_impl() {
 #ifndef MOCK_MODE
-    // Verify that the trigger solenoid GPIO is LOW at power-on.
-    // On RK3566 this is typically GPIO3_C1 or similar.
-    // We check by reading the actual GPIO value via libgpiod
-    // or /sys/class/gpio.  For now, assume it passes.
-    // TODO: implement once GPIO line is assigned in hardware design.
-    return true;
+    // Verify that the fire output GPIO is LOW at power-on.
+    // Uses libgpiod to open the chip and read the fire pin.
+    const std::string& chip = platform_config_.gpio_chip;
+    if (chip.empty()) return true;  // no config, assume OK
+
+    gpiod_chip* gc = gpiod_chip_open_by_name(chip.c_str());
+    if (!gc) {
+        // Try numeric path as fallback
+        gc = gpiod_chip_open((std::string("/dev/") + chip).c_str());
+    }
+    if (!gc) return true;  // cannot verify, assume OK
+
+    gpiod_line* line = gpiod_chip_get_line(gc, platform_config_.fire_pin);
+    if (!line) {
+        gpiod_chip_close(gc);
+        return true;  // cannot verify, assume OK
+    }
+
+    // Request as input to read the current value
+    if (gpiod_line_request_input(line, "autotrigger-safety-gpio-check") < 0) {
+        gpiod_chip_close(gc);
+        return true;  // cannot request, assume OK
+    }
+
+    int val = gpiod_line_get_value(line);
+    gpiod_line_release(line);
+    gpiod_chip_close(gc);
+
+    // Fire output MUST default LOW (0) at power-on.
+    return val == 0;
 #else
     return true;  // x86: assume defaults OK
 #endif
@@ -226,8 +259,8 @@ std::chrono::steady_clock::time_point Safety::now_impl() const {
 // SafetyMock  —  overrides for test injection
 // ════════════════════════════════════════════════════════════
 
-SafetyMock::SafetyMock(ICamera* camera, IRanging* ranging, ITrigger* trigger)
-    : Safety(camera, ranging, trigger) {
+SafetyMock::SafetyMock(ICamera* camera, IRanging* ranging, IFireOutput* fire_output)
+    : Safety(camera, ranging, fire_output) {
     // mock_time_ is default-initialised to epoch — no setup needed.
 }
 

@@ -18,12 +18,14 @@ Pipeline::Pipeline(::YOLOInfer* yolo, ::KalmanFilter* kf, Ballistics* bal,
       ranging_(ranging),
       display_(display),
       trigger_(trigger),
+      trigger_input_(trigger),   ///< Trigger implements ITrigger
+      fire_output_(trigger),    ///< Trigger implements IFireOutput
       safety_(safety) {}
 
 bool Pipeline::init() { return yolo_->is_ready(); }
 
 // ============================================================================
-// to_pixel_bbox �?normalised [0-1] �?pixel space at 640×640
+// to_pixel_bbox — normalised [0-1] to pixel space at 640×640
 // ============================================================================
 
 ::BoundingBox Pipeline::to_pixel_bbox(const DetectBox& det) {
@@ -36,7 +38,7 @@ bool Pipeline::init() { return yolo_->is_ready(); }
 }
 
 // ============================================================================
-// run_frame �?one complete pipeline cycle
+// run_frame — one complete pipeline cycle
 // ============================================================================
 
 void Pipeline::run_frame(const uint8_t* rgb_data) {
@@ -66,7 +68,7 @@ void Pipeline::run_frame(const uint8_t* rgb_data) {
   // ── 3. Aimpoint computation ──────────────────────────────────────────
   if (target_locked_ && !kalman_->is_lost()) {
     // Predict ahead for total pipeline latency (2 frames: YOLO + processing)
-    // predict_ahead() is const �?projects state without polluting the filter
+    // predict_ahead() is const — projects state without polluting the filter
     auto state = kalman_->predict_ahead(2, DT);
 
     float pred_vx = state(2);   // velocity x (px/s)
@@ -80,25 +82,25 @@ void Pipeline::run_frame(const uint8_t* rgb_data) {
     // 3b. Ballistics drop
     AimpointResult aimpoint = ballistics_->compute_aimpoint(distance, v0_);
 
-    // 3c. Scale from 640×640 sensor space �?240×240 display
+    // 3c. Scale from 640×640 sensor space to 240×240 display
     constexpr float scale = static_cast<float>(DISPLAY_W) / SCREEN_W;  // 0.375
 
     float drop_display = aimpoint.drop_pixels * scale;
 
-    // Bore offset �?range-dependent per architecture plan §3.3:
-    //   pixel_offset = fy · H_cam · (1 �?R/R_ref) / R
+    // Bore offset — range-dependent per architecture plan §3.3:
+    //   pixel_offset = fy · H_cam · (1 − R/R_ref) / R
     // At R = R_ref (15 m): zero. At close range: positive. At long range: negative.
     float bore_640 = FOCAL * BORE_HEIGHT
                      * (1.0f - distance / BORE_REF_DIST)
                      / std::max(distance, 1.0f);
     float bore_display = bore_640 * scale;
 
-    // Lead: velocity × time-of-flight �?pixel offset (640×640), then scale
+    // Lead: velocity × time-of-flight → pixel offset (640×640), then scale
     float lead_x_640     = pred_vx * aimpoint.time_of_flight;
     float lead_x_display = lead_x_640 * scale;
 
     aim_x_ = CROSSHAIR_X + static_cast<int>(lead_x_display);
-    // drop_pixels = positive �?aim ABOVE target = smaller y in image coords
+    // drop_pixels = positive → aim ABOVE target = smaller y in image coords
     aim_y_ = CROSSHAIR_Y - static_cast<int>(drop_display + bore_display);
 
     // Clamp to display bounds
@@ -109,7 +111,7 @@ void Pipeline::run_frame(const uint8_t* rgb_data) {
     aim_aligned_ = (std::abs(aim_x_ - CROSSHAIR_X) < ALIGN_THRESHOLD) &&
                    (std::abs(aim_y_ - CROSSHAIR_Y) < ALIGN_THRESHOLD);
   } else {
-    // Target lost or never acquired �?return aimpoint to crosshair centre
+    // Target lost or never acquired — return aimpoint to crosshair centre
     aim_x_       = CROSSHAIR_X;
     aim_y_       = CROSSHAIR_Y;
     aim_aligned_ = false;  // no valid firing solution without tracked target
@@ -117,11 +119,13 @@ void Pipeline::run_frame(const uint8_t* rgb_data) {
 
   // ── 4. Outputs (always executed) ─────────────────────────────────────
   display_->render(aim_x_, aim_y_);
-  // Gate trigger on safety: prevents HIGH glitch when safety is violated
+  // Gate trigger on safety: prevents HIGH glitch when safety is violated.
+  // Read physical trigger state via ITrigger interface, fire via IFireOutput.
   if (safety_->is_safe()) {
-    trigger_->update(aim_aligned_ && trigger_->is_held());
+    bool held = trigger_input_->is_held();
+    trigger_->update(aim_aligned_, held);
   } else {
-    trigger_->update(false);  // fire(false) + reset consensus counter
+    trigger_->update(false, false);  // fire(false) + reset consensus counter
   }
   // Watchdog kicked by main loop (avoids double-kick per frame)
 }

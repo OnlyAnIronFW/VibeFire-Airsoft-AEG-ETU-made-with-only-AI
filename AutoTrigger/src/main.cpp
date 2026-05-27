@@ -4,7 +4,10 @@
 #include <chrono>
 #include <thread>
 #include <string>
+#include <fstream>
+#include <sstream>
 
+#include "autotrigger/hal/config.h"
 #include "autotrigger/yolo_infer.h"
 #include "autotrigger/kalman_filter.h"
 #include "autotrigger/ballistics.h"
@@ -21,8 +24,46 @@ void signal_handler(int) {
     // NOTE: do NOT call std::cout here — not async-signal-safe
 }
 
+/** Parse a simple key=value config file into a PlatformConfig. */
+static autotrigger::PlatformConfig load_config_from_file(const std::string& path) {
+    autotrigger::PlatformConfig config;
+    std::ifstream in(path);
+    if (!in.is_open()) {
+        std::cerr << "Warning: cannot open config file " << path
+                  << ", using defaults\n";
+        return config;
+    }
+    std::string line;
+    while (std::getline(in, line)) {
+        // Strip comments and whitespace
+        auto comment_pos = line.find('#');
+        if (comment_pos != std::string::npos) line = line.substr(0, comment_pos);
+        auto eq = line.find('=');
+        if (eq == std::string::npos) continue;
+
+        std::string key = line.substr(0, eq);
+        std::string val = line.substr(eq + 1);
+        // Trim whitespace
+        key.erase(0, key.find_first_not_of(" \t\r\n"));
+        key.erase(key.find_last_not_of(" \t\r\n") + 1);
+        val.erase(0, val.find_first_not_of(" \t\r\n"));
+        val.erase(val.find_last_not_of(" \t\r\n") + 1);
+
+        if (key.empty() || val.empty()) continue;
+
+        if (key == "uart_device")       config.uart_device     = val;
+        else if (key == "gpio_chip")    config.gpio_chip       = val;
+        else if (key == "fire_pin")     config.fire_pin        = static_cast<unsigned int>(std::stoul(val));
+        else if (key == "trigger_pin")  config.trigger_pin     = static_cast<unsigned int>(std::stoul(val));
+        else if (key == "camera_device") config.camera_device  = val;
+        else if (key == "thermal_zone")  config.thermal_zone   = val;
+        else if (key == "watchdog_device") config.watchdog_device = val;
+    }
+    return config;
+}
+
 int main(int argc, char* argv[]) {
-    std::cout << "AutoTrigger v1.0" << std::endl;
+    std::cout << "AutoTrigger v1.1" << std::endl;
     std::cout << "Target: " <<
 #ifdef MOCK_MODE
         "x86_64 (mock mode)"
@@ -35,7 +76,9 @@ int main(int argc, char* argv[]) {
     std::string model_path = "models/yolov5n.rknn";
     std::string table_path = "tables/drop_table.bin";
     std::string uart_path = "/dev/ttyS1";
+    std::string config_path;
     float v0 = 70.0f;
+    bool demo_mode = false;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -43,10 +86,27 @@ int main(int argc, char* argv[]) {
         else if (arg == "--table" && i + 1 < argc) table_path = argv[++i];
         else if (arg == "--uart" && i + 1 < argc) uart_path = argv[++i];
         else if (arg == "--v0" && i + 1 < argc) v0 = std::stof(argv[++i]);
+        else if (arg == "--config" && i + 1 < argc) config_path = argv[++i];
+        else if (arg == "--demo") demo_mode = true;
         else {
-            std::cerr << "Usage: autotrigger [--model PATH] [--table PATH] [--uart DEV] [--v0 MPS]\n";
+            std::cerr << "Usage: autotrigger [--model PATH] [--table PATH] [--uart DEV] [--v0 MPS] [--config PATH] [--demo]\n";
             return 1;
         }
+    }
+
+    // ── PlatformConfig ────────────────────────────
+    autotrigger::PlatformConfig platform_config;
+    if (!config_path.empty()) {
+        platform_config = load_config_from_file(config_path);
+        std::cout << "Config loaded from: " << config_path << "\n";
+    }
+    // Override UART path from CLI (for backward compat)
+    if (!uart_path.empty()) {
+        platform_config.uart_device = uart_path;
+    }
+
+    if (demo_mode) {
+        std::cout << "Demo mode: all hardware calls mocked\n";
     }
 
     // ── Signal handling ────────────────────────────
@@ -60,9 +120,10 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    autotrigger::Ranging ranging(uart_path);
-    autotrigger::Trigger trigger;
-    autotrigger::Safety safety(nullptr, &ranging, &trigger);
+    autotrigger::Ranging ranging(platform_config.uart_device);
+    autotrigger::Trigger trigger(platform_config, demo_mode);
+    autotrigger::Safety safety(nullptr, &ranging, &trigger,
+                                platform_config);
     YOLOMock yolo; // TODO: replace with real YOLOInfer on ARM64
     KalmanFilter kalman;
     autotrigger::Ballistics ballistics;
@@ -85,9 +146,9 @@ int main(int argc, char* argv[]) {
         std::cerr << "Failed to initialize trigger GPIO\n";
         return 1;
     }
-    trigger.fire(false); // Safety: ensure LOW at startup
+    trigger.fire(false); // Safety: ensure LOW at startup via IFireOutput
 
-    // Safety startup check
+    // Safety startup check (internally calls fire_output_->fire(false))
     auto startup = safety.do_startup_check();
     if (!startup.can_proceed) {
         std::cerr << "Startup check failed\n";
@@ -127,10 +188,10 @@ int main(int argc, char* argv[]) {
             // ── Post-pipeline watchdog kick (covers YOLO infer + ballistic compute) ──
             safety.kick_watchdog();
 
-            // ── Safety gate: veto trigger output if safety conditions violated ──
+            // ── Safety gate: veto fire output if safety conditions violated ──
             // Even if the pipeline wants to fire, safety has final authority.
             if (!safety.is_safe()) {
-                trigger.fire(false);
+                trigger.fire(false);  // IFireOutput::fire
             }
 
             last_frame = now;
@@ -141,8 +202,8 @@ int main(int argc, char* argv[]) {
 
     // ── Graceful shutdown ─────────────────────────
     std::cout << "\nShutting down..." << std::endl;
-    trigger.fire(false);
+    trigger.fire(false);  // IFireOutput::fire
     display.release();
-    std::cout << "AutoTrigger v1.0 stopped." << std::endl;
+    std::cout << "AutoTrigger v1.1 stopped." << std::endl;
     return 0;
 }
