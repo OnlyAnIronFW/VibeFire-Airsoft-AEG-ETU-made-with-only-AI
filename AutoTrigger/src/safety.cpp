@@ -10,8 +10,7 @@
 
 #ifndef MOCK_MODE
 #include <unistd.h>     // ::open, ::write, ::close
-#include <fcntl.h>      // O_WRONLY, O_RDWR
-#include <sys/ioctl.h>  // ioctl, I2C_SLAVE
+#include <fcntl.h>      // O_WRONLY
 #endif
 
 namespace autotrigger {
@@ -201,33 +200,9 @@ bool Safety::check_camera_present_impl() {
 }
 
 bool Safety::ping_tof_sensor_impl() {
-#ifndef MOCK_MODE
-    // RK3566: try a quick I²C read from the VL53L1X sensor.
-    // The sensor's default I²C address is 0x29.
-    // This is a lightweight presence check.
-    int i2c_fd = ::open("/dev/i2c-1", O_RDWR);
-    if (i2c_fd < 0) return false;
-
-    // Set slave address
-    if (::ioctl(i2c_fd, 0x0703 /* I2C_SLAVE */, 0x29) < 0) {
-        ::close(i2c_fd);
-        return false;
-    }
-
-    // Read WHO_AM_I / chip-ID register (register 0x01 on VL53L1X)
-    unsigned char reg = 0x01;
-    unsigned char val = 0;
-    if (::write(i2c_fd, &reg, 1) != 1 ||
-        ::read(i2c_fd, &val, 1) != 1) {
-        ::close(i2c_fd);
-        return false;
-    }
-
-    ::close(i2c_fd);
-    return (val == 0xEA);  // VL53L1X expected model ID
-#else
-    return true;  // x86: assume ToF present
-#endif
+    // Delegate to the ranging module's UART check (JRT TOF01, not VL53L1X).
+    if (ranging_) return ranging_->try_ping(500);
+    return false;
 }
 
 bool Safety::check_gpio_defaults_impl() {

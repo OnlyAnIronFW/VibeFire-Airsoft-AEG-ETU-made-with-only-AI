@@ -76,6 +76,47 @@ bool Ranging::is_healthy() {
   return elapsed < timeout_ms_;
 }
 
+bool Ranging::try_ping(int timeout_ms) {
+#ifdef MOCK_MODE
+  return true;  // x86: assume ToF present
+#else
+  // Ensure UART is open
+  if (uart_fd_ < 0 && !open_uart()) return false;
+
+  // Single-byte state machine: scan for 0x5A header, then
+  // accumulate a full 8-byte frame and validate checksum.
+  enum { IDLE, ACCUMULATING } st = IDLE;
+  uint8_t buf[JRT_FRAME_SIZE];
+  int     idx = 0;
+
+  auto start = std::chrono::steady_clock::now();
+  while (true) {
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                       std::chrono::steady_clock::now() - start)
+                       .count();
+    if (elapsed >= timeout_ms) return false;
+
+    uint8_t b;
+    int n = read_uart(&b, 1);
+    if (n != 1) continue;  // no byte available — spin
+
+    if (st == IDLE) {
+      if (b == JRT_HEADER) {
+        buf[0]    = b;
+        idx       = 1;
+        st        = ACCUMULATING;
+      }
+    } else {  // ACCUMULATING
+      buf[idx++] = b;
+      if (idx == JRT_FRAME_SIZE) {
+        float unused;
+        return parse_frame(buf, unused);
+      }
+    }
+  }
+#endif
+}
+
 // ============================================================================
 // Monocular input
 // ============================================================================

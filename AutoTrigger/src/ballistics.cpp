@@ -48,6 +48,27 @@ bool Ballistics::is_loaded() const { return loaded_; }
 void Ballistics::set_fy(float fy_px) { fy_ = fy_px; }
 float Ballistics::fy() const { return fy_; }
 
+// ── Configurable physics ──────────────────────────────────────────
+
+void Ballistics::set_config(const BallisticsConfig& cfg) {
+    config_ = cfg;
+
+    // Recompute the derived alpha coefficient
+    alpha_ = (config_.air_density * config_.dart_area_m2 *
+              config_.drag_coefficient) /
+             (2.0f * config_.dart_mass_kg);
+
+    // Copy the rest
+    gravity_   = config_.gravity;
+    velocities_[0] = config_.velocities[0];
+    velocities_[1] = config_.velocities[1];
+    velocities_[2] = config_.velocities[2];
+}
+
+const BallisticsConfig& Ballistics::config() const {
+    return config_;
+}
+
 // ─────────────────────────────────────────────────────
 // Main computation
 // ─────────────────────────────────────────────────────
@@ -110,12 +131,12 @@ float Ballistics::bilinear_interpolate(float range, float v0) const {
     rt = std::clamp(rt, 0.0f, 1.0f);
 
     // velocity -> piecewise index + fractional between the three columns
-    if (v0 <= kVelocities[0]) {
+    if (v0 <= velocities_[0]) {
         // Below minimum: constant-extrapolate from column 0
         float v00 = table_[r0][0];
         float v01 = table_[r1][0];
         return v00 + rt * (v01 - v00);
-    } else if (v0 >= kVelocities[kVelEntries - 1]) {
+    } else if (v0 >= velocities_[kVelEntries - 1]) {
         // Above maximum: constant-extrapolate from last column
         int col = kVelEntries - 1;
         float v00 = table_[r0][col];
@@ -124,11 +145,11 @@ float Ballistics::bilinear_interpolate(float range, float v0) const {
     } else {
         // Between two columns: linear interpolation
         int col = 0;
-        while (col < kVelEntries - 1 && v0 > kVelocities[col + 1]) {
+        while (col < kVelEntries - 1 && v0 > velocities_[col + 1]) {
             ++col;
         }
-        float vt = (v0 - kVelocities[col]) /
-                   (kVelocities[col + 1] - kVelocities[col]);
+        float vt = (v0 - velocities_[col]) /
+                   (velocities_[col + 1] - velocities_[col]);
 
         float v00 = table_[r0][col];
         float v01 = table_[r1][col];
@@ -176,7 +197,7 @@ float numeric_drop(float range, float v0, float alpha, float g) {
 
 float Ballistics::analytic_drop(float range, float v0) const {
     if (range <= 0.0f || v0 < 1.0f) return 0.0f;
-    return numeric_drop(range, v0, kAlpha, kGravity);
+    return numeric_drop(range, v0, alpha_, gravity_);
 }
 
 // ─────────────────────────────────────────────────────
@@ -188,12 +209,12 @@ float Ballistics::analytic_time_of_flight(float range, float v0) const {
     //   ->  vx(t) = v0 / (1 + alpha * v0 * t)
     //   ->  x(t)  = ln(1 + alpha * v0 * t) / alpha
     //   ->  t(x)  = (e^(alpha * x) - 1) / (alpha * v0)
-    float ax = kAlpha * range;
+    float ax = alpha_ * range;
     // Clamp exp argument to prevent overflow
     if (ax > 80.0f) ax = 80.0f;
 
     float ep1 = std::exp(ax);
-    float denom = kAlpha * v0;
+    float denom = alpha_ * v0;
     if (denom < 1e-12f) return 0.0f;
 
     return (ep1 - 1.0f) / denom;
