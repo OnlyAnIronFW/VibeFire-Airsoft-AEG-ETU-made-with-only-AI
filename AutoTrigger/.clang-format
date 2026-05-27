@@ -1,0 +1,17 @@
+---
+Language:        Cpp
+BasedOnStyle:    LLVM
+ColumnLimit:     100
+Standard:        c++17
+IndentWidth:      2
+TabWidth:         2
+UseTab:          Never
+AccessModifierOffset: -2
+AllowShortFunctionsOnASingleLine: InlineOnly
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+BreakBeforeBraces: Attach
+PointerAlignment: Left
+IncludeBlocks:   Regroup
+SortIncludes:    true
+...

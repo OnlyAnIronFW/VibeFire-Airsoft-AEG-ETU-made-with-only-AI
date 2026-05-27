@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "author": "FCU Fire Control",
+  "editor": "wokwi",
+  "parts": [
+    { "id": "nano", "type": "wokwi-arduino-nano", "left": 0, "top": 60, "attrs": {} },
+
+    { "id": "oled", "type": "board-ssd1306", "left": 390, "top": -30, "attrs": {} },
+
+    { "id": "btn-trigger", "type": "wokwi-pushbutton", "left": 30, "top": 300, "attrs": { "color": "red", "label": "TRIG" } },
+    { "id": "btn-up", "type": "wokwi-pushbutton", "left": 120, "top": 300, "attrs": { "color": "green", "label": "UP" } },
+    { "id": "btn-down", "type": "wokwi-pushbutton", "left": 180, "top": 300, "attrs": { "color": "green", "label": "DN" } },
+    { "id": "btn-sel", "type": "wokwi-pushbutton", "left": 240, "top": 300, "attrs": { "color": "blue", "label": "SEL" } },
+
+    { "id": "sw-home", "type": "wokwi-slide-switch", "left": 350, "top": 300, "attrs": { "label": "HOME" } },
+    { "id": "sw-sel-a", "type": "wokwi-slide-switch", "left": 430, "top": 300, "attrs": { "label": "SEL-A" } },
+    { "id": "sw-sel-b", "type": "wokwi-slide-switch", "left": 510, "top": 300, "attrs": { "label": "SEL-B" } },
+
+    { "id": "led-motor", "type": "wokwi-led", "left": 350, "top": 400, "attrs": { "color": "green", "label": "MOTOR" } },
+    { "id": "led-brake", "type": "wokwi-led", "left": 410, "top": 400, "attrs": { "color": "red", "label": "BRAKE" } },
+    { "id": "led-armed", "type": "wokwi-led", "left": 470, "top": 400, "attrs": { "color": "yellow", "label": "RDY" } },
+
+    { "id": "pot-batt", "type": "wokwi-potentiometer", "left": 570, "top": 300, "attrs": { "label": "BATT SIM" } }
+  ],
+
+  "connections": [
+    ["nano:5V", "oled:VCC", "red", []],
+    ["nano:GND.1", "oled:GND", "black", []],
+    ["nano:A4", "oled:SDA", "green", []],
+    ["nano:A5", "oled:SCL", "blue", []],
+
+    ["nano:2", "btn-trigger:1L", "orange", []],
+    ["nano:GND.1", "btn-trigger:1R", "black", []],
+    ["nano:7", "btn-up:1L", "green", []],
+    ["nano:GND.1", "btn-up:1R", "black", []],
+    ["nano:8", "btn-down:1L", "green", []],
+    ["nano:GND.1", "btn-down:1R", "black", []],
+    ["nano:9", "btn-sel:1L", "blue", []],
+    ["nano:GND.1", "btn-sel:1R", "black", []],
+
+    ["nano:3", "sw-home:1", "yellow", []],
+    ["nano:GND.1", "sw-home:2", "black", []],
+    ["nano:4", "sw-sel-a:1", "yellow", []],
+    ["nano:GND.1", "sw-sel-a:2", "black", []],
+    ["nano:5", "sw-sel-b:1", "yellow", []],
+    ["nano:GND.1", "sw-sel-b:2", "black", []],
+
+    ["nano:6", "led-motor:A", "green", []],
+    ["nano:GND.1", "led-motor:C", "black", []],
+    ["nano:A1", "led-brake:A", "red", []],
+    ["nano:GND.1", "led-brake:C", "black", []],
+    ["nano:13", "led-armed:A", "yellow", []],
+    ["nano:GND.1", "led-armed:C", "black", []],
+
+    ["nano:5V", "pot-batt:1", "red", []],
+    ["nano:GND.1", "pot-batt:3", "black", []],
+    ["nano:A0", "pot-batt:2", "green", []]
+  ]
+}

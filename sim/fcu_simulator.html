@@ -1,0 +1,1281 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FCU 火控仿真器 - 电动软弹枪</title>
+<style>
+:root {
+  --bg: #1a1a1a;
+  --panel: #252525;
+  --border: #444;
+  --text: #ddd;
+  --accent: #ff6600;
+  --green: #33cc33;
+  --red: #ee3333;
+  --blue: #3399ff;
+  --yellow: #ffcc00;
+  --oled-bg: #000a00;
+  --oled-px: #33ff33;
+}
+
+* { margin:0; padding:0; box-sizing:border-box; }
+
+body {
+  font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 100vh;
+  padding: 10px;
+}
+
+.container {
+  display: grid;
+  grid-template-columns: 420px 380px;
+  grid-template-rows: auto auto;
+  gap: 14px;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.panel-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  color: #888;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 4px;
+}
+
+/* OLED Display */
+.oled-panel { grid-column: 1; grid-row: 1; }
+#oled-canvas {
+  display: block;
+  image-rendering: pixelated;
+  border: 2px solid #111;
+  border-radius: 4px;
+  background: var(--oled-bg);
+}
+
+/* Gear Animation */
+.gear-panel { grid-column: 2; grid-row: 1; }
+#gear-canvas {
+  display: block;
+  background: #1a1a1a;
+  border-radius: 4px;
+}
+
+/* Controls */
+.ctrl-panel { grid-column: 1 / -1; grid-row: 2; }
+
+.ctrl-row {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.ctrl-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+.ctrl-label {
+  font-size: 10px;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+/* Trigger Button */
+.trigger-btn {
+  width: 90px;
+  height: 90px;
+  border-radius: 50%;
+  border: 3px solid #555;
+  background: radial-gradient(circle at 40% 35%, #3a3a3a, #1a1a1a);
+  color: #ccc;
+  font-size: 16px;
+  font-weight: bold;
+  cursor: pointer;
+  user-select: none;
+  transition: all 0.05s;
+  letter-spacing: 2px;
+}
+.trigger-btn:active, .trigger-btn.active {
+  background: radial-gradient(circle at 40% 35%, #5a3030, #2a1010);
+  border-color: var(--red);
+  color: #ff6666;
+  box-shadow: 0 0 20px rgba(255,0,0,0.3);
+  transform: scale(0.95);
+}
+
+/* Selector Switch */
+.selector-switch {
+  display: flex;
+  gap: 2px;
+  background: #333;
+  border-radius: 6px;
+  padding: 3px;
+}
+.selector-pos {
+  padding: 6px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: bold;
+  color: #666;
+  transition: all 0.15s;
+  border: 1px solid transparent;
+}
+.selector-pos.active {
+  background: var(--accent);
+  color: #000;
+  border-color: #ff8833;
+  box-shadow: 0 0 8px rgba(255,102,0,0.4);
+}
+
+/* Menu Buttons */
+.menu-btn {
+  width: 50px;
+  height: 36px;
+  border-radius: 6px;
+  border: 1px solid #555;
+  background: #2a2a2a;
+  color: #ccc;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: bold;
+  transition: all 0.05s;
+}
+.menu-btn:active, .menu-btn.active {
+  background: #444;
+  border-color: var(--blue);
+  color: var(--blue);
+  box-shadow: 0 0 8px rgba(51,153,255,0.3);
+}
+
+/* Battery Slider */
+.bat-slider {
+  width: 140px;
+  accent-color: var(--accent);
+}
+.bat-value {
+  font-size: 13px;
+  font-weight: bold;
+  min-width: 50px;
+}
+.bat-low { color: var(--red); }
+
+/* Status LEDs */
+.led-row {
+  display: flex;
+  gap: 20px;
+  margin-left: auto;
+}
+.led {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+}
+.led-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #333;
+  transition: all 0.1s;
+}
+.led-dot.on-green  { background: var(--green);  box-shadow: 0 0 8px var(--green); }
+.led-dot.on-red    { background: var(--red);    box-shadow: 0 0 8px var(--red); }
+.led-dot.on-blue   { background: var(--blue);   box-shadow: 0 0 8px var(--blue); }
+.led-dot.on-yellow { background: var(--yellow); box-shadow: 0 0 8px var(--yellow); }
+
+/* State display */
+.state-info {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 12px;
+  font-size: 12px;
+  font-family: 'Consolas', 'Courier New', monospace;
+}
+.state-info .val { color: var(--accent); font-weight: bold; }
+.state-info .err { color: var(--red); }
+
+/* Debounce visualization */
+.gear-info {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
+  font-size: 10px;
+  color: #666;
+  font-family: 'Consolas', monospace;
+}
+
+/* Responsive */
+@media (max-width: 860px) {
+  .container {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto;
+  }
+  .oled-panel { grid-column: 1; grid-row: 1; }
+  .gear-panel { grid-column: 1; grid-row: 2; }
+  .ctrl-panel { grid-column: 1; grid-row: 3; }
+}
+</style>
+</head>
+<body>
+
+<div class="container">
+
+  <!-- OLED 模拟 -->
+  <div class="panel oled-panel">
+    <div class="panel-title">OLED 128×64 显示</div>
+    <canvas id="oled-canvas" width="256" height="128"></canvas>
+  </div>
+
+  <!-- 齿轮动画 + 状态 -->
+  <div class="panel gear-panel" style="position:relative;">
+    <div class="panel-title">齿轮 / 天梯桶 实时动画</div>
+    <div style="display:flex; gap:10px; align-items:flex-start;">
+      <canvas id="gear-canvas" width="220" height="220"></canvas>
+      <div class="state-info" id="state-info"></div>
+    </div>
+  </div>
+
+  <!-- 控制面板 -->
+  <div class="panel ctrl-panel">
+    <div class="panel-title">控制面板</div>
+    <div class="ctrl-row" style="justify-content:space-between;">
+
+      <!-- 扳机 -->
+      <div class="ctrl-group">
+        <div class="ctrl-label">扳机</div>
+        <button class="trigger-btn" id="trigger-btn"
+          onmousedown="triggerDown()" onmouseup="triggerUp()" onmouseleave="triggerUp()"
+          ontouchstart="triggerDown();event.preventDefault()"
+          ontouchend="triggerUp();event.preventDefault()">
+          扳机
+        </button>
+      </div>
+
+      <!-- 快慢机 -->
+      <div class="ctrl-group">
+        <div class="ctrl-label">快慢机选择</div>
+        <div class="selector-switch" id="selector-sw">
+          <div class="selector-pos active" data-pos="1">档位1</div>
+          <div class="selector-pos" data-pos="2">档位2</div>
+        </div>
+      </div>
+
+      <!-- 菜单按钮 -->
+      <div class="ctrl-group">
+        <div class="ctrl-label">菜单</div>
+        <div style="display:flex; gap:4px;">
+          <button class="menu-btn" id="btn-up"   onmousedown="btnDown('up')" onmouseup="btnUp('up')" onmouseleave="btnUp('up')">UP</button>
+          <button class="menu-btn" id="btn-down" onmousedown="btnDown('down')" onmouseup="btnUp('down')" onmouseleave="btnUp('down')">DN</button>
+          <button class="menu-btn" id="btn-sel"  onmousedown="btnDown('sel')" onmouseup="btnUp('sel')" onmouseleave="btnUp('sel')">SEL</button>
+        </div>
+      </div>
+
+      <!-- 弹匣 -->
+      <div class="ctrl-group">
+        <div class="ctrl-label">弹匣 (NFC)</div>
+        <div style="display:flex; gap:3px; align-items:center;">
+          <button id="mag-btn" style="padding:4px 8px; font-size:11px; border-radius:4px; background:#2a2a2a; color:#ccc; border:1px solid #555; cursor:pointer;"
+            onclick="toggleMag()">插入弹匣</button>
+          <input type="number" id="mag-cap" value="30" min="1" max="999" style="width:45px; background:#333; color:#ffcc00; border:1px solid #555; font-size:12px; padding:2px; text-align:center;"
+            onchange="mag_capacity=parseInt(this.value)||30" title="弹匣容量">
+        </div>
+      </div>
+
+      <!-- 电池 -->
+      <div class="ctrl-group">
+        <div class="ctrl-label">电池电压</div>
+        <input type="range" class="bat-slider" id="bat-slider" min="180" max="252" value="240" step="1">
+        <span class="bat-value" id="bat-value">24.0V</span>
+      </div>
+
+      <!-- 状态 LED -->
+      <div class="led-row">
+        <div class="led"><span class="led-dot" id="led-motor"></span>电机</div>
+        <div class="led"><span class="led-dot" id="led-brake"></span>刹车</div>
+        <div class="led"><span class="led-dot" id="led-home"></span>归位</div>
+        <div class="led"><span class="led-dot" id="led-error"></span>故障</div>
+      </div>
+    </div>
+
+    <!-- 快捷键提示 -->
+    <div style="font-size:10px; color:#555; margin-top:4px; border-top:1px solid #333; padding-top:4px;">
+      快捷键: 空格=扳机 | 1/2/3/4=快慢机 | ↑↓=菜单 | Enter=SELECT | T=切换预压
+    </div>
+  </div>
+</div>
+
+<script>
+// ============================================================
+// 仿真核心 —— 精确复刻 Arduino 固件的状态机
+// ============================================================
+
+// ── 枚举 ──
+const FIRE_MODE = { SAFE:0, SEMI:1, BINARY:2, BURST:3, AUTO:4 };
+const FCU_STATE = { IDLE:0, FIRING:1, PRECOMP:2, BRAKING:3, DONE:4 };
+const MENU_PAGE = { OFF:0, MAIN:1, PRE_COMP:2, EMPTY_LOCK:3, MODE_MAP:4, AMMO:5, BATTERY:6, EDIT_BURST:7 };
+const MODE_NAMES = ['SAFE','SEMI','BIN','BURST','AUTO'];
+
+// ── 仿真参数 ──
+const GEAR_CYCLE_MS = 90;          // 齿轮旋转一周 (≈11 RPS)
+const HOME_ANGLE = 0;              // 归位角度 (度, 0=12点钟)
+const HOME_DEBOUNCE_MS = 8;       // 归位去抖 (仿真加速)
+const BRAKE_DURATION_MS = 120;
+const PRE_COMP_MAX = 100;          // 预压最大延迟
+const STALL_TIMEOUT = 2500;        // 堵转超时
+const BTN_LONG_MS = 800;           // 长按阈值
+const BTN_REPEAT_MS = 200;         // 长按连发间隔
+const MENU_TIMEOUT = 8000;         // 菜单超时
+const BAT_LOW_V = 19.8;            // 低电压阈值
+const CELL_COUNT = 6;
+
+// ── 状态机变量 (与固件一致) ──
+let fcu_state = FCU_STATE.IDLE;
+let home_isr_flag = false;
+let cycle_active = false;
+let cycle_start_time = 0;          // 当前循环开始时间 (sim time)
+let home_trigger_time = 0;         // 归位触发时间
+let brake_start_time = 0;
+let precomp_start_time = 0;
+let error_stall = false;
+let binary_armed = false;
+let burst_remaining = 0;
+let burst_counts = [3, 3, 3, 3];
+let empty_lock = true;
+let rof_rps = 0.0;
+let last_home_time = 0;
+let auto_brake_pending = false;
+let fire_mode = FIRE_MODE.SEMI;
+let selector_code = 1;             // 0=SAFE, 1=SEMI, 2=BINARY, 3=AUTO
+let ammo = 0;   // 初始无弹匣=0, NFC读到标签后自动设置
+let precomp_ms = 0;
+let mode_map = [FIRE_MODE.SAFE, FIRE_MODE.SEMI, FIRE_MODE.BINARY, FIRE_MODE.AUTO];
+
+// 按钮
+let btn = { up: false, down: false, sel: false };
+let btn_prev = { up: false, down: false, sel: false };
+let btn_press_time = { up: 0, down: 0, sel: 0 };
+
+// 菜单
+let menu_page = MENU_PAGE.OFF;
+let menu_cursor = 0;
+let menu_edit_slot = 0;
+let menu_idle_time = 0;
+
+// 传感器
+let trigger_pulled = false;
+let bat_voltage = 24.0;
+let bat_low = false;
+
+// 齿轮角度 (当前旋转角度)
+let gear_angle = 0;                // 0-360, 0 = 12点钟 (home position)
+let motor_running = false;
+let brake_active = false;
+
+// 霍尔传感器模拟: 齿轮上的磁铁有宽度 (~10°), 经过归位传感器时触发
+const MAGNET_HALF_WIDTH = 8;       // 磁铁半宽 (度)
+
+// ── 弹匣仿真 (NFC 纯读取) ──
+const MAG_STATE = { ABSENT:0, PRESENT:1 };
+let mag_state_v = MAG_STATE.ABSENT;
+let mag_capacity = 30;
+let mag_inserted = false;
+
+function simInsertMag(cap) {
+  mag_inserted = true;
+  mag_capacity = cap || 30;
+}
+function simEjectMag() {
+  mag_inserted = false;
+}
+function simPollNFC() {
+  if (mag_inserted) {
+    if (mag_state_v !== MAG_STATE.PRESENT) {
+      mag_state_v = MAG_STATE.PRESENT;
+      ammo = mag_capacity;  // 每次读到标签都装弹
+    }
+  } else {
+    if (mag_state_v === MAG_STATE.PRESENT) {
+      mag_state_v = MAG_STATE.ABSENT;
+      ammo = 0;
+    }
+  }
+}
+
+// ── 辅助函数 ──
+function angleDiff(a, b) {
+  let d = ((a - b) % 360 + 360) % 360;
+  return d > 180 ? d - 360 : d;
+}
+function isMagnetAtSensor() {
+  return Math.abs(angleDiff(gear_angle, HOME_ANGLE)) < MAGNET_HALF_WIDTH;
+}
+
+// ── 按钮事件绑定 ──
+function triggerDown() {
+  trigger_pulled = true;
+  document.getElementById('trigger-btn').classList.add('active');
+}
+function triggerUp() {
+  trigger_pulled = false;
+  document.getElementById('trigger-btn').classList.remove('active');
+}
+function btnDown(name) {
+  btn[name] = true;
+  if (!btn_prev[name]) btn_press_time[name] = performance.now();
+  document.getElementById('btn-' + name).classList.add('active');
+}
+function btnUp(name) {
+  btn[name] = false;
+  document.getElementById('btn-' + name).classList.remove('active');
+}
+
+// 快慢机点击
+document.querySelectorAll('.selector-pos').forEach(el => {
+  el.addEventListener('click', () => {
+    document.querySelectorAll('.selector-pos').forEach(e => e.classList.remove('active'));
+    el.classList.add('active');
+    selector_code = parseInt(el.dataset.pos);
+    binary_armed = false;
+  });
+});
+
+// 弹匣按钮
+function toggleMag() {
+  let btn = document.getElementById('mag-btn');
+  if (mag_inserted) {
+    simEjectMag();
+    btn.textContent = '插入弹匣';
+    btn.style.background = '#2a2a2a';
+  } else {
+    let cap = parseInt(document.getElementById('mag-cap').value) || 30;
+    simInsertMag(cap);
+    btn.textContent = '拔出弹匣';
+    btn.style.background = '#3a2a0a';
+  }
+}
+
+// 电池滑块
+document.getElementById('bat-slider').addEventListener('input', function() {
+  bat_voltage = parseInt(this.value) / 10.0;
+  bat_low = bat_voltage < BAT_LOW_V;
+  document.getElementById('bat-value').textContent = bat_voltage.toFixed(1) + 'V';
+  if (bat_low) document.getElementById('bat-value').classList.add('bat-low');
+  else document.getElementById('bat-value').classList.remove('bat-low');
+});
+
+// 快捷键
+document.addEventListener('keydown', e => {
+  if (e.repeat) return;
+  switch (e.key) {
+    case ' ': e.preventDefault(); triggerDown(); break;
+    case '1': selector_code = 0; updateSelectorUI(); break;
+    case '2': selector_code = 1; updateSelectorUI(); break;
+    case '3': selector_code = 2; updateSelectorUI(); break;
+    case '4': selector_code = 3; updateSelectorUI(); break;
+    case 'ArrowUp':    btnDown('up'); break;
+    case 'ArrowDown':  btnDown('down'); break;
+    case 'Enter':      btnDown('sel'); break;
+    case 't': precomp_ms = (precomp_ms + 10) % (PRE_COMP_MAX + 10); break;
+  }
+});
+document.addEventListener('keyup', e => {
+  switch (e.key) {
+    case ' ': triggerUp(); break;
+    case 'ArrowUp':   btnUp('up'); break;
+    case 'ArrowDown': btnUp('down'); break;
+    case 'Enter':     btnUp('sel'); break;
+  }
+});
+
+function updateSelectorUI() {
+  document.querySelectorAll('.selector-pos').forEach((el, i) => {
+    el.classList.toggle('active', i === selector_code);
+  });
+  binary_armed = false;
+}
+
+// ── 主循环 ──
+let lastFrameTime = performance.now();
+let simTime = 0;  // 仿真累计时间
+
+function mainLoop(timestamp) {
+  let dt = timestamp - lastFrameTime;
+  lastFrameTime = timestamp;
+
+  if (dt > 100) dt = 100;
+  simTime += dt;
+
+  // ── 1. 传感器 ──
+  readSensors();
+  simPollNFC();  // NFC 弹匣轮询
+
+  // ── 2. 状态机 (buttons use prev saved at END of last frame) ──
+  if (menu_page !== MENU_PAGE.OFF) {
+    runMenu();
+  } else {
+    runFCU();
+  }
+
+  // ── 3. 物理 ──
+  updateGearPhysics(dt);
+
+  // ── 4. 绘制 ──
+  drawOLED();
+  drawGear();
+  drawStateInfo();
+  updateLEDs();
+
+  // ── 5. 保存按钮/扳机前值 (用于下一帧边沿检测) ──
+  for (let k of ['up','down','sel']) {
+    btn_prev[k] = btn[k];
+    if (!btn[k]) btnLongFired[k] = false;  // 松手复位长按标志
+  }
+  _trigger_prev = trigger_pulled;
+
+  requestAnimationFrame(mainLoop);
+}
+
+// ── 传感器读取 ──
+function readSensors() {
+  fire_mode = mode_map[selector_code];
+  bat_low = bat_voltage < BAT_LOW_V;
+}
+
+
+// 简化按钮边沿检测 (用 prev 比较)
+function btnRose(name) { return btn[name] && !btn_prev[name]; }
+function btnLong(name) {
+  return btn[name] && (performance.now() - btn_press_time[name] >= BTN_LONG_MS);
+}
+let btnLongFired = { up: false, down: false, sel: false };
+function btnLongOnce(name) {
+  if (btnLong(name) && !btnLongFired[name]) {
+    btnLongFired[name] = true;
+    return true;
+  }
+  return false;
+}
+
+// ── 火控状态机 (精确复刻固件) ──
+function runFCU() {
+  // 长按 SELECT → 菜单
+  if (fcu_state === FCU_STATE.IDLE && btnLongOnce('sel')) {
+    menu_page = MENU_PAGE.MAIN;
+    menu_cursor = 0;
+    menu_idle_time = performance.now();
+    return;
+  }
+
+  switch (fcu_state) {
+
+  case FCU_STATE.IDLE: {
+    auto_brake_pending = false;
+    let canFire = fire_mode !== FIRE_MODE.SAFE
+               && (ammo > 0 || !empty_lock)
+               && !bat_low
+               && !error_stall;
+
+    if (canFire) {
+      if (fire_mode === FIRE_MODE.BINARY) {
+        // 松开检测不依赖边沿, 防cycle中丢沿
+        if (trigger_pulled && !_trigger_prev) {
+          binary_armed = true; startCycle();
+        } else if (!trigger_pulled && binary_armed) {
+          binary_armed = false; startCycle();
+        }
+      } else if (fire_mode === FIRE_MODE.BURST && trigger_pulled && !_trigger_prev) {
+        burst_remaining = burst_counts[selector_code];
+        startCycle();
+      } else {
+        if (trigger_pulled && !_trigger_prev) startCycle();
+      }
+    } else {
+      binary_armed = false;
+    }
+    break;
+  }
+
+  case FCU_STATE.FIRING: {
+    // 堵转保护
+    if (performance.now() - cycle_start_time > STALL_TIMEOUT) {
+      emergencyStop();
+      error_stall = true;
+      auto_brake_pending = false;
+      fcu_state = FCU_STATE.IDLE;
+      cycle_active = false;
+      break;
+    }
+
+    // BURST 中再次扣扳机 → 重置连发计数
+    if (fire_mode === FIRE_MODE.BURST && trigger_pulled && !_trigger_prev) {
+      burst_remaining = burst_counts[selector_code];
+    }
+
+    // 连发模式下松扳机 → 标记等下一发归位刹车
+    if (fire_mode === FIRE_MODE.AUTO && !trigger_pulled) {
+      auto_brake_pending = true;
+    }
+
+    if (home_isr_flag) {
+      // 归位确认 (每过一次归位 = 1发完成)
+      if (ammo > 0) ammo--;
+      if (last_home_time > 0) {
+        let instant = 1000.0 / (performance.now() - last_home_time);
+        rof_rps = rof_rps * 0.3 + instant * 0.7;
+      }
+      last_home_time = performance.now();
+
+      let keep = false;
+      if (fire_mode === FIRE_MODE.AUTO && trigger_pulled && ammo > 0 && !auto_brake_pending) {
+        keep = true;
+      } else if (fire_mode === FIRE_MODE.BURST && burst_remaining > 1 && ammo > 0) {
+        burst_remaining--; keep = true;
+      }
+      if (keep) {
+        cycle_start_time = performance.now();
+      } else {
+        auto_brake_pending = false;
+        if (precomp_ms > 0) {
+          precomp_start_time = performance.now();
+          fcu_state = FCU_STATE.PRECOMP;
+        } else {
+          applyBrake();
+          fcu_state = FCU_STATE.BRAKING;
+        }
+      }
+      home_isr_flag = false;
+    }
+    break;
+  }
+
+  case FCU_STATE.PRECOMP: {
+    if (performance.now() - precomp_start_time >= precomp_ms) {
+      applyBrake();
+      fcu_state = FCU_STATE.BRAKING;
+    }
+    home_isr_flag = false;
+    break;
+  }
+
+  case FCU_STATE.BRAKING: {
+    if (trigger_pulled && !_trigger_prev) {
+      releaseBrake();
+      startCycle();
+      break;
+    }
+
+    if (performance.now() - brake_start_time >= BRAKE_DURATION_MS) {
+      releaseBrake();
+      finishCycle();
+      fcu_state = FCU_STATE.DONE;
+    }
+    break;
+  }
+
+  case FCU_STATE.DONE: {
+    if (fire_mode === FIRE_MODE.BURST && burst_remaining > 1 && ammo > 0 && !bat_low && !error_stall) {
+      burst_remaining--;
+      startCycle();
+      break;
+    }
+    burst_remaining = 0;
+    fcu_state = FCU_STATE.IDLE;
+    cycle_active = false;
+    break;
+  }
+
+  }
+}
+
+// 扳机上一帧状态 (在 mainLoop 尾部更新)
+let _trigger_prev = false;
+
+// ── 循环控制 ──
+function startCycle() {
+  cycle_active = true;
+  home_isr_flag = false;
+  auto_brake_pending = false;
+  resetMagnetHistory();
+  fcu_state = FCU_STATE.FIRING;
+  motorOn();
+  cycle_start_time = performance.now();
+}
+
+function finishCycle() {
+  // ammo 已在 FIRING 的 home 检测时扣除
+}
+
+// ── 电机控制 ──
+function motorOn() {
+  motor_running = true;
+  brake_active = false;
+}
+function motorOff() {
+  motor_running = false;
+}
+function applyBrake() {
+  motor_running = false;  // 先关电机
+  // 实际有死区, 仿真简化
+  brake_active = true;
+  brake_start_time = performance.now();
+}
+function releaseBrake() {
+  brake_active = false;
+}
+function emergencyStop() {
+  motor_running = false;
+  brake_active = true;
+  setTimeout(() => { brake_active = false; }, 250);
+}
+
+// ── 齿轮物理 ──
+let _magnet_was_at_sensor = true;  // 初始时齿轮在归位点，磁铁在传感器下
+
+function updateGearPhysics(dt) {
+  let angularSpeed = 360.0 / GEAR_CYCLE_MS;
+
+  if (motor_running) {
+    gear_angle = (gear_angle + angularSpeed * dt) % 360;
+    if (gear_angle < 0) gear_angle += 360;
+
+    let nowAtSensor = isMagnetAtSensor();
+    if (!_magnet_was_at_sensor && nowAtSensor && fcu_state === FCU_STATE.FIRING) {
+      home_isr_flag = true;
+    }
+    _magnet_was_at_sensor = nowAtSensor;
+  }
+
+  if (brake_active && !motor_running) {
+    // 刹车瞬间减速到停止 (简化)
+    // 不做额外动画
+  }
+}
+
+// 循环开始时重置磁铁历史 (齿轮从归位点出发，磁铁一开始就在传感器下)
+function resetMagnetHistory() {
+  _magnet_was_at_sensor = isMagnetAtSensor();
+}
+
+// ── 菜单 ──  (扳机=确认, SEL短按=返回, SEL长按=退出)
+function runMenu() {
+  if (performance.now() - menu_idle_time > MENU_TIMEOUT) {
+    menu_page = MENU_PAGE.OFF;
+    return;
+  }
+
+  // 长按 SEL → 退出菜单回 IDLE
+  if (btnLongOnce('sel')) {
+    menu_page = MENU_PAGE.OFF;
+    menu_idle_time = performance.now();
+    return;
+  }
+
+  let up = btnRose('up');
+  let down = btnRose('down');
+  let back = btnRose('sel');                 // SEL 短按 = 返回
+  let trig = trigger_pulled && !_trigger_prev;  // 扳机 = 确认/选择
+  let upRep = btnLong('up') && (performance.now() - btn_press_time['up'] - BTN_LONG_MS) % BTN_REPEAT_MS < 20;
+  let downRep = btnLong('down') && (performance.now() - btn_press_time['down'] - BTN_LONG_MS) % BTN_REPEAT_MS < 20;
+
+  if (up || down || back || trig) menu_idle_time = performance.now();
+  if (upRep || downRep) menu_idle_time = performance.now();
+
+  // SEL 短按 = 返回 (子页面→MAIN, MAIN→退出)
+  if (back) {
+    if (menu_page === MENU_PAGE.MAIN) {
+      menu_page = MENU_PAGE.OFF;
+    } else {
+      menu_page = MENU_PAGE.MAIN;
+      menu_cursor = 0;
+    }
+    return;
+  }
+
+  switch (menu_page) {
+
+  case MENU_PAGE.MAIN: {
+    const N = 5;
+    if (up)   menu_cursor = (menu_cursor - 1 + N) % N;
+    if (down) menu_cursor = (menu_cursor + 1) % N;
+    if (trig) {
+      switch (menu_cursor) {
+        case 0: menu_page = MENU_PAGE.PRE_COMP;   break;
+        case 1: menu_page = MENU_PAGE.EMPTY_LOCK; break;
+        case 2: menu_page = MENU_PAGE.MODE_MAP;   break;
+        case 3: menu_page = MENU_PAGE.AMMO;       break;
+        case 4: menu_page = MENU_PAGE.BATTERY;    break;
+      }
+    }
+    break;
+  }
+
+  case MENU_PAGE.PRE_COMP: {
+    let d = 0;
+    if (up || upRep) d = +5;
+    if (down || downRep) d = -5;
+    if (d !== 0) {
+      precomp_ms = Math.max(0, Math.min(PRE_COMP_MAX, precomp_ms + d));
+    }
+    break;
+  }
+
+  case MENU_PAGE.EMPTY_LOCK: {
+    if (trig) { empty_lock = !empty_lock; }
+    break;
+  }
+
+  case MENU_PAGE.MODE_MAP: {
+    if (up)   menu_edit_slot = (menu_edit_slot + 1) % 4;
+    if (down) menu_edit_slot = (menu_edit_slot - 1 + 4) % 4;
+    if (trig) {
+      mode_map[menu_edit_slot] = (mode_map[menu_edit_slot] + 1) % 5;
+      if (mode_map[menu_edit_slot] === FIRE_MODE.BURST) {
+        menu_page = MENU_PAGE.EDIT_BURST;
+      }
+    }
+    break;
+  }
+
+  case MENU_PAGE.EDIT_BURST: {
+    let d = 0;
+    if (up || upRep) d = +1;
+    if (down || downRep) d = -1;
+    if (d !== 0) {
+      burst_counts[menu_edit_slot] = Math.max(2, Math.min(10, burst_counts[menu_edit_slot] + d));
+    }
+    if (trig || back) {
+      menu_page = MENU_PAGE.MODE_MAP;
+    }
+    break;
+  }
+
+  case MENU_PAGE.AMMO: {
+    let d = 0;
+    if (up || upRep) d = +5;
+    if (down || downRep) d = -5;
+    if (d !== 0) {
+      ammo = Math.max(0, Math.min(999, ammo + d));
+    }
+    break;
+  }
+
+  case MENU_PAGE.BATTERY: {
+    // 只读
+    break;
+  }
+
+  }
+}
+
+// ── 绘制 OLED (Canvas 模拟 SSD1306 128x64) ──
+function drawOLED() {
+  let c = document.getElementById('oled-canvas');
+  let ctx = c.getContext('2d');
+  let W = 256, H = 128;  // 2x 缩放
+
+  ctx.fillStyle = '#000a00';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.fillStyle = '#33ff33';
+  ctx.font = '12px "Courier New", monospace';
+  ctx.textBaseline = 'top';
+
+  if (menu_page !== MENU_PAGE.OFF) {
+    drawMenuOLED(ctx);
+  } else {
+    drawMainOLED(ctx);
+  }
+}
+
+function drawMainOLED(ctx) {
+  let W = 256, H = 128;
+
+  // ── 顶栏: 电压 | ROF/预压 | 状态 ──
+  ctx.font = '12px "Courier New", monospace';
+  if (bat_low) text(ctx, 4, 2, 'LOW!', '#ff3333');
+  else text(ctx, 4, 2, bat_voltage.toFixed(1) + 'V');
+
+  let mid = '';
+  if (cycle_active && rof_rps > 0.5) mid = Math.round(rof_rps) + 'RPS';
+  else if (precomp_ms > 0 && fcu_state === FCU_STATE.IDLE && !cycle_active) mid = 'PRE:' + precomp_ms;
+  else mid = '0RPS';
+  text(ctx, 104, 2, mid, '#ffcc00');
+
+  let st = error_stall ? ['ERR','#ff3333'] : bat_low ? ['LOW','#ff3333'] : cycle_active ? ['>>','#33ff33'] : ['OK','#33ff33'];
+  text(ctx, 220, 2, st[0], st[1]);
+
+  ctx.strokeStyle = '#33ff3333';
+  ctx.beginPath();
+  ctx.moveTo(0, 16); ctx.lineTo(W, 16);
+  ctx.stroke();
+
+  // ── 中央大字: 弹量 / 容量 ──
+  ctx.font = 'bold 42px "Courier New", monospace';
+  let ammoStr = String(ammo);
+  let cap = mag_capacity > 0 ? mag_capacity : 30;
+  let capStr = '/' + cap;
+  ctx.font = '12px "Courier New", monospace';
+  let capW = ctx.measureText(capStr).width;
+  ctx.font = 'bold 42px "Courier New", monospace';
+  let ammoW = ctx.measureText(ammoStr).width;
+  let totalW = ammoW + 4 + capW;
+  let startX = (W - totalW) / 2;
+  text(ctx, startX, 22, ammoStr, ammo===0?'#ff3333':'#33ff33');
+  ctx.font = '12px "Courier New", monospace';
+  text(ctx, startX + ammoW + 4, 42, capStr, '#33ff3366');
+
+  // ── 进度条 ──
+  let barX = 20, barY = 70, barW = 216, barH = 10;
+  ctx.strokeStyle = '#33ff33';
+  ctx.strokeRect(barX, barY, barW, barH);
+  let fillW = Math.min(barW - 2, Math.round(ammo / cap * (barW - 2)));
+  if (fillW > 0) ctx.fillRect(barX + 1, barY + 1, fillW, barH - 2);
+
+  // ── 底栏: 模式 | 弹匣 ──
+  ctx.font = '12px "Courier New", monospace';
+  text(ctx, 4, 56, MODE_NAMES[fire_mode], '#ffcc00');
+
+  if (ammo === 0 && mag_state_v === MAG_STATE.PRESENT) {
+    text(ctx, 160, 56, 'EMPTY', '#ff3333');
+  } else if (mag_state_v === MAG_STATE.ABSENT) {
+    text(ctx, 160, 56, 'NO MAG', '#ff6600');
+  } else {
+    text(ctx, 180, 56, 'HOLD SEL', '#33ff3366');
+  }
+}
+
+function drawMenuOLED(ctx) {
+  let x = 4, y = 2, lh = 17;
+  let W = 256;
+
+  ctx.font = '13px "Courier New", monospace';
+
+  switch (menu_page) {
+
+  case MENU_PAGE.MAIN:
+    text(ctx, x, y, '===== MENU =====', '#ffffff');
+    y += lh + 4;
+    for (let i = 0; i < 5; i++) {
+      let items = ['Pre-Comp Delay','Empty Lock','Mode Config','Ammo Count','Battery Info'];
+      text(ctx, x, y, (i === menu_cursor ? '> ' : '  ') + items[i],
+        i === menu_cursor ? '#ffffff' : '#33ff33');
+      y += lh;
+    }
+    y += 4;
+    text(ctx, x, y, 'TRIG=Sel SEL=Back', '#33ff3366');
+    break;
+
+  case MENU_PAGE.PRE_COMP:
+    text(ctx, x, y, '=== PRE-COMP ===', '#ffffff');
+    y += lh + 4;
+    text(ctx, x, y, 'Delay: ' + precomp_ms + ' ms');
+    y += lh;
+    ctx.strokeRect(x, y + 2, 180, 10);
+    let pw = Math.round(precomp_ms / PRE_COMP_MAX * 178);
+    if (pw > 0) ctx.fillRect(x, y + 2, pw, 10);
+    y += lh + 6;
+    text(ctx, x, y, 'UP +5  DOWN -5');
+    y += lh;
+    text(ctx, x, y, 'SEL=Back', '#33ff3366');
+    break;
+
+  case MENU_PAGE.EMPTY_LOCK:
+    text(ctx, x, y, '== EMPTY LOCK ==', '#ffffff');
+    y += lh + 4;
+    text(ctx, x, y, 'Status: ' + (empty_lock ? 'ON' : 'OFF'),
+      empty_lock ? '#33ff33' : '#ff6600');
+    y += lh;
+    text(ctx, x, y, empty_lock ? 'ammo=0 blocks fire' : 'dry fire allowed', '#33ff3366');
+    y += lh + 4;
+    text(ctx, x, y, 'TRIG=Toggle SEL=Back', '#33ff3366');
+    break;
+
+  case MENU_PAGE.MODE_MAP:
+    text(ctx, x, y, '=== MODE MAP ===', '#ffffff');
+    y += lh;
+    for (let i = 0; i < 4; i++) {
+      let label = (i === menu_edit_slot ? '> ' : '  ') + 'P' + (i+1) + ':' + MODE_NAMES[mode_map[i]];
+      if (mode_map[i] === FIRE_MODE.BURST) label += ' x' + burst_counts[i];
+      text(ctx, x, y, label, i === menu_edit_slot ? '#ffffff' : '#33ff33');
+      y += lh;
+    }
+    y += 2;
+    text(ctx, x, y, 'UP/DN=Slot TRIG=Chg', '#33ff3366');
+    break;
+
+  case MENU_PAGE.EDIT_BURST:
+    text(ctx, x, y, '== BURST P' + (menu_edit_slot+1) + ' ==', '#ffffff');
+    y += lh + 4;
+    text(ctx, x, y, 'Shots: ' + burst_counts[menu_edit_slot]);
+    y += lh + 4;
+    text(ctx, x, y, 'UP +1  DOWN -1');
+    y += lh;
+    text(ctx, x, y, 'TRIG/SEL=OK (2-10)', '#33ff3366');
+    break;
+
+  case MENU_PAGE.AMMO:
+    text(ctx, x, y, '=== AMMO ===', '#ffffff');
+    y += lh + 4;
+    text(ctx, x, y, 'Count: ' + ammo);
+    y += lh + 4;
+    text(ctx, x, y, 'UP +5  DOWN -5');
+    y += lh;
+    text(ctx, x, y, 'SEL=Back', '#33ff3366');
+    break;
+
+  case MENU_PAGE.BATTERY:
+    text(ctx, x, y, '=== BATTERY ===', '#ffffff');
+    y += lh + 4;
+    text(ctx, x, y, 'Total: ' + bat_voltage.toFixed(1) + 'V');
+    y += lh;
+    text(ctx, x, y, 'Cell:  ' + (bat_voltage / CELL_COUNT).toFixed(2) + 'V');
+    y += lh + 4;
+    text(ctx, x, y, 'SEL=Back', '#33ff3366');
+    break;
+  }
+}
+
+function text(ctx, x, y, str, color) {
+  ctx.fillStyle = color || '#33ff33';
+  ctx.fillText(str, x, y);
+}
+
+// ── 齿轮动画 Canvas ──
+function drawGear() {
+  let c = document.getElementById('gear-canvas');
+  let ctx = c.getContext('2d');
+  let W = c.width, H = c.height;
+  let cx = W / 2, cy = H / 2;
+  let gearR = 70;
+
+  ctx.fillStyle = '#1a1a1a';
+  ctx.fillRect(0, 0, W, H);
+
+  // 刻度环
+  ctx.strokeStyle = '#333';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.arc(cx, cy, gearR + 15, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // 归位标记 (12点钟方向)
+  let homeRad = (HOME_ANGLE - 90) * Math.PI / 180;
+  let hx = cx + Math.cos(homeRad) * (gearR + 18);
+  let hy = cy + Math.sin(homeRad) * (gearR + 18);
+  ctx.fillStyle = '#ffcc00';
+  ctx.font = 'bold 14px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('HOME', hx, hy - 12);
+  // 霍尔传感器标记
+  ctx.fillStyle = '#ffcc00';
+  ctx.beginPath();
+  ctx.arc(hx, hy, 5, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 天梯桶/弹簧 (左侧示意)
+  let pistonX = cx - gearR - 40;
+  let springTop = cy - 50;
+  let springBottom = cy + 50;
+
+  // 弹簧状态: 基于齿轮角度计算活塞位置
+  // 0°=home, 活塞在释放位置 (最上)
+  // 180°=活塞完全压缩 (最下)
+  let angle = ((gear_angle % 360) + 360) % 360;
+  let pistonPos;
+  if (angle <= 180) {
+    // 齿轮拉动活塞: 0→180 度, 活塞从释放→压缩
+    pistonPos = springTop + (springBottom - springTop) * (angle / 180);
+  } else {
+    // 齿轮释放活塞: 180→360 度, 活塞弹回
+    pistonPos = springBottom - (springBottom - springTop) * ((angle - 180) / 180);
+  }
+
+  // 气缸
+  ctx.strokeStyle = '#555';
+  ctx.lineWidth = 3;
+  ctx.strokeRect(pistonX - 8, springTop - 5, 16, springBottom - springTop + 10);
+
+  // 弹簧 (锯齿线)
+  ctx.strokeStyle = '#888';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  let coils = 10;
+  let coilH = (pistonPos - springTop) / coils;
+  let zigX = pistonX;
+  for (let i = 0; i < coils; i++) {
+    let cy2 = springTop + i * coilH;
+    ctx.lineTo(zigX - 6, cy2);
+    ctx.lineTo(zigX + 6, cy2 + coilH / 2);
+    ctx.lineTo(zigX - 6, cy2 + coilH);
+  }
+  ctx.stroke();
+
+  // 活塞头
+  ctx.fillStyle = '#666';
+  ctx.fillRect(pistonX - 10, pistonPos - 4, 20, 24);
+  ctx.fillStyle = '#888';
+  ctx.fillRect(pistonX - 8, pistonPos, 16, 16);
+
+  // ── 齿轮主体 ──
+  // 齿 (简化: 外圈锯齿)
+  ctx.save();
+  ctx.translate(cx, cy);
+  let gearAngleRad = (angle - 90) * Math.PI / 180;  // canvas 0=3点钟
+
+  ctx.strokeStyle = '#666';
+  ctx.lineWidth = 1;
+  let teeth = 20;
+  for (let i = 0; i < teeth; i++) {
+    let a = (i / teeth) * Math.PI * 2;
+    ctx.beginPath();
+    ctx.moveTo(Math.cos(a) * (gearR - 4), Math.sin(a) * (gearR - 4));
+    ctx.lineTo(Math.cos(a) * (gearR + 4), Math.sin(a) * (gearR + 4));
+    ctx.stroke();
+  }
+
+  // 齿轮圆盘
+  ctx.fillStyle = '#3a3a3a';
+  ctx.beginPath();
+  ctx.arc(0, 0, gearR - 6, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#555';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // 磁铁 (红色扇形)
+  let magnetRad = (HOME_ANGLE - 90) * Math.PI / 180;
+  ctx.fillStyle = '#ff3333';
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  ctx.arc(0, 0, gearR - 10, magnetRad - MAGNET_HALF_WIDTH * Math.PI/180,
+          magnetRad + MAGNET_HALF_WIDTH * Math.PI/180);
+  ctx.closePath();
+  ctx.fill();
+
+  // 磁铁标签
+  ctx.fillStyle = '#fff';
+  ctx.font = '9px sans-serif';
+  ctx.textAlign = 'center';
+  let labelR = gearR / 2;
+  ctx.fillText('M', Math.cos(magnetRad) * labelR, Math.sin(magnetRad) * labelR + 3);
+
+  // 中心轴
+  ctx.fillStyle = '#888';
+  ctx.beginPath();
+  ctx.arc(0, 0, 5, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 旋转箭头 (指示方向)
+  if (motor_running) {
+    ctx.strokeStyle = '#33ff33';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(0, 0, gearR + 10, -Math.PI/2, Math.PI, false);
+    let arrowEnd = Math.PI;
+    let ax = Math.cos(arrowEnd) * (gearR + 10);
+    let ay = Math.sin(arrowEnd) * (gearR + 10);
+    ctx.moveTo(ax - 8, ay - 4);
+    ctx.lineTo(ax, ay);
+    ctx.lineTo(ax + 2, ay - 8);
+    ctx.stroke();
+  }
+
+  ctx.restore();
+
+  // 角度标签
+  ctx.fillStyle = '#666';
+  ctx.font = '10px "Consolas", monospace';
+  ctx.textAlign = 'right';
+  ctx.fillText('angle: ' + angle.toFixed(0) + '°', W - 8, H - 8);
+
+  // 霍尔触发指示
+  if (isMagnetAtSensor()) {
+    ctx.fillStyle = '#ffcc00';
+    ctx.font = 'bold 11px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('SENSOR ACTIVE', cx, cy + gearR + 30);
+  }
+}
+
+// ── 状态信息面板 ──
+function drawStateInfo() {
+  let el = document.getElementById('state-info');
+  let stateNames = ['IDLE','FIRING','PRECOMP','BRAKING','DONE'];
+  let stateColors = ['#666','#33ff33','#ffcc00','#ff6600','#3399ff'];
+
+  let html = '';
+  html += '<div>状态: <span class="val" style="color:' + stateColors[fcu_state] + '">'
+        + stateNames[fcu_state] + '</span></div>';
+  html += '<div>模式: <span class="val">' + MODE_NAMES[fire_mode] + '</span></div>';
+  html += '<div>弹量: <span class="val">' + ammo + '</span></div>';
+  html += '<div>预压: <span class="val">' + precomp_ms + 'ms</span></div>';
+  html += '<div>电压: <span class="val' + (bat_low?' err':'') + '">' + bat_voltage.toFixed(1) + 'V</span></div>';
+  html += '<div>齿轮: <span class="val">' + gear_angle.toFixed(1) + '&deg;</span></div>';
+  html += '<div>磁铁: <span class="val" style="color:' + (isMagnetAtSensor()?'#ffcc00':'#666') + '">'
+        + (isMagnetAtSensor()?'IN SENSOR':'out') + '</span></div>';
+  html += '<div>BinArmed: <span class="val">' + (binary_armed?'YES':'no') + '</span></div>';
+  html += '<div>Burst: <span class="val">' + burst_remaining + '/' + burst_counts[selector_code] + '</span></div>';
+  let magNames = ['无弹匣','已插入'];
+  html += '<div>弹匣: <span class="val" style="color:' + (mag_state_v===MAG_STATE.ABSENT?'#ee3333':'#33ff33') + '">' + magNames[mag_state_v] + '</span></div>';
+  html += '<div>容量: <span class="val">' + mag_capacity + '</span></div>';
+  if (error_stall) html += '<div class="err">[堵转故障] 点击复位</div>';
+  html += '<div style="margin-top:6px;font-size:10px;color:#666;">';
+  html += '快慢机=[' + ['保险','单发','双行程','连发'][selector_code] + ']<br>';
+  html += '扳机=' + (trigger_pulled?'按下':'松开') + '<br>';
+  html += '弹匣=' + (mag_inserted?'插入':'拔出') + '<br>';
+  html += 'Menu=' + (menu_page !== MENU_PAGE.OFF ? 'ON':'OFF');
+  html += '</div>';
+
+  // 故障复位按钮
+  if (error_stall) {
+    html += '<div style="margin-top:6px"><button onclick="error_stall=false" style="font-size:11px;">清除故障</button></div>';
+  }
+
+  el.innerHTML = html;
+}
+
+// ── LED 指示灯 ──
+function updateLEDs() {
+  setLED('led-motor', motor_running ? 'on-green' : '');
+  setLED('led-brake', brake_active ? 'on-red' : '');
+  setLED('led-home', isMagnetAtSensor() ? 'on-yellow' : '');
+  setLED('led-error', error_stall ? 'on-red' : (bat_low ? 'on-red' : ''));
+}
+
+function setLED(id, cls) {
+  let el = document.getElementById(id);
+  el.className = 'led-dot ' + cls;
+}
+
+// ── 初始化 ──
+document.getElementById('bat-value').textContent = bat_voltage.toFixed(1) + 'V';
+updateSelectorUI();
+drawOLED(); drawGear(); drawStateInfo(); updateLEDs();  // 立即渲染首帧
+requestAnimationFrame(mainLoop);
+
+console.log('FCU 火控仿真器已启动');
+console.log('快捷键: 空格=扳机 | 1/2/3/4=快慢机 | ↑↓=菜单 | Enter=SELECT | T=循环预压值');
+console.log('状态机: IDLE→FIRING→PRECOMP→BRAKING→DONE→IDLE');
+</script>
+</body>
+</html>
