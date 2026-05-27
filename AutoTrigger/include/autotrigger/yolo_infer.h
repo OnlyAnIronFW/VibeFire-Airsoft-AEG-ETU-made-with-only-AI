@@ -55,6 +55,14 @@ class YOLOMock : public YOLOInfer {
 // Post-processing helpers (free functions — testable in isolation)
 // ---------------------------------------------------------------------------
 
+/** Decode raw YOLOv5n output tensor into DetectBox list.
+ *  raw_output: [25200 * 85] float32 array (cx, cy, w, h, obj, class_0..79).
+ *  conf_thresh: minimum confidence to keep (default 0.25).
+ *  Returns: vector of DetectBox with cx,cy,w,h in [0,1] normalised to 640×640.
+ */
+std::vector<DetectBox> decode_raw_output(const float* raw_output,
+                                         float conf_thresh = 0.25f);
+
 /// Sort by confidence descending, apply NMS (IoU threshold), then filter by
 /// minimum confidence.  Returns the surviving boxes sorted by confidence.
 std::vector<DetectBox> apply_nms(

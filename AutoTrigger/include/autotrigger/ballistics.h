@@ -26,6 +26,19 @@ struct AimpointResult {
     bool out_of_range = false;
 };
 
+// ============================================================================
+// BallisticsConfig — user-configurable physics parameters
+// ============================================================================
+
+struct BallisticsConfig {
+    float dart_mass_kg     = 0.002f;        ///< Dart mass (kg), default 2g foam dart
+    float drag_coefficient = 0.67f;         ///< Cd, flat-nose foam dart
+    float dart_area_m2     = 1.13e-4f;      ///< Cross-section area (m²), 12mm ∅
+    float air_density      = 1.225f;        ///< Air density (kg/m³) at sea level
+    float gravity          = 9.81f;         ///< Gravitational acceleration (m/s²)
+    float velocities[3]    = {55.0f, 70.0f, 90.0f}; ///< Muzzle velocity profiles (m/s)
+};
+
 /**
  * @brief Precomputed ballistics engine for foam-dart projectiles.
  *
@@ -56,6 +69,18 @@ public:
 
     /** Get the current focal length in pixels. */
     float fy() const;
+
+    // ── Configurable physics ────────────────────
+
+    /** Apply a custom physics configuration.
+     *  Recalculates the internal alpha (drag) coefficient from the
+     *  new parameters.  The drop table velocity columns are also
+     *  updated — note that changing velocities requires the binary
+     *  table file to have been generated with matching columns. */
+    void set_config(const BallisticsConfig& cfg);
+
+    /** Return the current physics configuration. */
+    const BallisticsConfig& config() const;
 
     // ── Computation ─────────────────────────────
 
@@ -89,7 +114,14 @@ private:
 
     float fy_ = 530.0f;   // pixels (62° HFOV @ 640 px)
 
-    // ── Physics constants ───────────────────────
+    // ── Configurable physics ────────────────────
+
+    BallisticsConfig config_{};   // user-configurable dart/atmosphere params
+    float alpha_ = (1.225f * 1.13e-4f * 0.67f) / (2.0f * 0.002f); // default alpha
+    float gravity_ = 9.81f;
+    float velocities_[3] = {55.0f, 70.0f, 90.0f};
+
+    // ── Physics constants (legacy, kept for reference) ──
 
     static constexpr float kGravity   = 9.81f;
     static constexpr float kRho       = 1.225f;      // air density (kg/m³)

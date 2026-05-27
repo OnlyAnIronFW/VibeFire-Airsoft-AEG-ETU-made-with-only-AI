@@ -26,6 +26,7 @@ class Ranging : public IRanging {
   bool init() override;
   float get_distance() override;
   bool is_healthy() override;
+  bool try_ping(int timeout_ms = 500) override;
 
   // ---- Monocular fallback ------------------------------------------------
   /// Feed a monocular bbox detection for fallback / fusion.
@@ -101,16 +102,19 @@ class RangingMock : public IRanging {
   void set_distance(float d) { distance_ = d; }
   void set_healthy(bool h) { healthy_ = h; }
   void set_low_confidence(bool lc) { low_confidence_ = lc; }
+  void set_mock_ping_result(bool r) { mock_ping_ok_ = r; }
 
   bool   init() override { return true; }
   float  get_distance() override { return distance_; }
   bool   is_healthy() override { return healthy_; }
+  bool   try_ping(int /*timeout_ms*/) override { return mock_ping_ok_; }
   bool   has_low_confidence() const { return low_confidence_; }
 
  private:
   float distance_       = 0.0f;
   bool  healthy_        = true;
   bool  low_confidence_ = false;
+  bool  mock_ping_ok_   = true;
 };
 
 }  // namespace autotrigger

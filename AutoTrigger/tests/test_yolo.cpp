@@ -2,8 +2,149 @@
 
 #include <gtest/gtest.h>
 
-// Free functions for post-processing (testable in isolation).
-// These are declared in yolo_infer.h.
+// ===== YOLO Decode Tests (RED phase) =====
+// decode_raw_output is declared in yolo_infer.h but NOT YET IMPLEMENTED.
+// These tests COMPILE but will FAIL at link time (unresolved symbol).
+
+#include <cmath>
+
+constexpr int NUM_CELLS = 25200;
+constexpr int ROW_SIZE  = 85;
+
+static inline float sigmoid(float x) {
+    return 1.0f / (1.0f + std::exp(-x));
+}
+
+// ---------------------------------------------------------------------------
+// Test: SigmoidActivationCorrect — sigmoid applied to tx/ty for cx/cy decode
+// ---------------------------------------------------------------------------
+TEST(YoloDecodeTest, SigmoidActivationCorrect) {
+    std::vector<float> raw(NUM_CELLS * ROW_SIZE, 0.0f);
+    // Anchor 0 on 80×80 grid, cell (gx=10, gy=5).
+    // Row index = 5 * 80 + 10 = 410
+    const int row  = 410;
+    const int base = row * ROW_SIZE;
+    raw[base + 0] = 0.0f;   // tx
+    raw[base + 1] = 0.0f;   // ty
+    raw[base + 2] = 0.0f;   // tw
+    raw[base + 3] = 0.0f;   // th
+    raw[base + 4] = 10.0f;  // obj  (sigmoid ≈ 1)
+    raw[base + 5] = 10.0f;  // cls0 (sigmoid ≈ 1)
+
+    auto boxes = decode_raw_output(raw.data(), 0.25f);
+    ASSERT_EQ(boxes.size(), 1u);
+
+    // sigmoid(0) = 0.5
+    // cx = (0.5*2 − 0.5 + 10) / 80 = 10.5 / 80 = 0.13125
+    float expected_cx = (sigmoid(0.0f) * 2.0f - 0.5f + 10.0f) / 80.0f;
+    float expected_cy = (sigmoid(0.0f) * 2.0f - 0.5f +  5.0f) / 80.0f;
+    EXPECT_NEAR(boxes[0].cx, expected_cx, 1e-5f);
+    EXPECT_NEAR(boxes[0].cy, expected_cy, 1e-5f);
+    EXPECT_GT(boxes[0].confidence, 0.9f);
+}
+
+// ---------------------------------------------------------------------------
+// Test: AnchorScalingCorrect — anchor dimensions scale w, h correctly
+// ---------------------------------------------------------------------------
+TEST(YoloDecodeTest, AnchorScalingCorrect) {
+    std::vector<float> raw(NUM_CELLS * ROW_SIZE, 0.0f);
+    // Anchor 0 (aw=10, ah=13) on 80×80 grid, cell (0,0), row 0
+    const int base = 0;
+    raw[base + 0] = 0.0f;   // tx
+    raw[base + 1] = 0.0f;   // ty
+    raw[base + 2] = 0.0f;   // tw → sigmoid(0)=0.5, (0.5×2)^2 = 1
+    raw[base + 3] = 0.0f;   // th → same
+    raw[base + 4] = 10.0f;  // obj
+    raw[base + 5] = 10.0f;  // cls0
+
+    auto boxes = decode_raw_output(raw.data(), 0.25f);
+    ASSERT_EQ(boxes.size(), 1u);
+
+    // w = 1.0 × 10 / 640 = 0.015625
+    EXPECT_NEAR(boxes[0].w, 10.0f / 640.0f, 1e-5f);
+    // h = 1.0 × 13 / 640 = 0.0203125
+    EXPECT_NEAR(boxes[0].h, 13.0f / 640.0f, 1e-5f);
+    EXPECT_GT(boxes[0].confidence, 0.9f);
+}
+
+// ---------------------------------------------------------------------------
+// Test: SingleDetectionDecodedCorrectly — verify all fields for a known box
+// ---------------------------------------------------------------------------
+TEST(YoloDecodeTest, SingleDetectionDecodedCorrectly) {
+    std::vector<float> raw(NUM_CELLS * ROW_SIZE, 0.0f);
+    // Anchor 3 (aw=30, ah=61) on 40×40 grid, cell (gx=0, gy=0).
+    // Row: 19200 + 0×40 + 0 = 19200
+    const int row  = 19200;
+    const int base = row * ROW_SIZE;
+    raw[base + 0] = 0.0f;   // tx
+    raw[base + 1] = 0.0f;   // ty
+    raw[base + 2] = 0.0f;   // tw
+    raw[base + 3] = 0.0f;   // th
+    raw[base + 4] = 10.0f;  // obj
+    raw[base + 5] = 10.0f;  // cls0
+
+    auto boxes = decode_raw_output(raw.data(), 0.25f);
+    ASSERT_EQ(boxes.size(), 1u);
+
+    // Grid 40×40, stride 16
+    // cx = (0.5×2 − 0.5 + 0) / 40 = 0.5/40 = 0.0125
+    EXPECT_NEAR(boxes[0].cx, 0.5f / 40.0f, 1e-5f);
+    EXPECT_NEAR(boxes[0].cy, 0.5f / 40.0f, 1e-5f);
+    // w = 1.0 × 30 / 640 = 0.046875
+    EXPECT_NEAR(boxes[0].w, 30.0f / 640.0f, 1e-5f);
+    // h = 1.0 × 61 / 640 = 0.0953125
+    EXPECT_NEAR(boxes[0].h, 61.0f / 640.0f, 1e-5f);
+    EXPECT_GT(boxes[0].confidence, 0.9f);
+    EXPECT_EQ(boxes[0].class_id, 0);
+}
+
+// ---------------------------------------------------------------------------
+// Test: ConfidenceFilterRemovesLow — low confidence below threshold drops
+// ---------------------------------------------------------------------------
+TEST(YoloDecodeTest, ConfidenceFilterRemovesLow) {
+    std::vector<float> raw(NUM_CELLS * ROW_SIZE, 0.0f);
+    // Cell 0 (row 0): high confidence → kept
+    {
+        const int base = 0;
+        raw[base + 4] = 10.0f;  // obj  → sigmoid ≈ 1
+        raw[base + 5] = 10.0f;  // cls0 → sigmoid ≈ 1
+    }
+    // Cell 1 (row 1): very low confidence → filtered
+    // obj = −5 → sigmoid(−5) ≈ 0.0067
+    // All class scores 0 → max sigmoid(0) = 0.5
+    // confidence ≈ 0.0067 × 0.5 ≈ 0.003  << 0.25
+    {
+        const int base = 1 * ROW_SIZE;
+        raw[base + 4] = -5.0f;  // obj
+    }
+
+    auto boxes = decode_raw_output(raw.data(), 0.25f);
+    ASSERT_EQ(boxes.size(), 1u);
+    EXPECT_GT(boxes[0].confidence, 0.9f);
+}
+
+// ---------------------------------------------------------------------------
+// Test: ClassIdExtractedCorrectly — best class selected from 80-way scores
+// ---------------------------------------------------------------------------
+TEST(YoloDecodeTest, ClassIdExtractedCorrectly) {
+    std::vector<float> raw(NUM_CELLS * ROW_SIZE, 0.0f);
+    // Anchor 0 on 80×80 grid, cell (0,0), row 0
+    const int base = 0;
+    raw[base + 0]  = 0.0f;   // tx
+    raw[base + 1]  = 0.0f;   // ty
+    raw[base + 2]  = 0.0f;   // tw
+    raw[base + 3]  = 0.0f;   // th
+    raw[base + 4]  = 10.0f;  // obj  (sigmoid ≈ 1)
+    raw[base + 5]  = 1.0f;   // cls0  → sigmoid(1) ≈ 0.731
+    raw[base + 20] = 5.0f;   // cls15 → sigmoid(5) ≈ 0.993  ← best!
+
+    auto boxes = decode_raw_output(raw.data(), 0.25f);
+    ASSERT_EQ(boxes.size(), 1u);
+
+    EXPECT_EQ(boxes[0].class_id, 15);
+    // confidence = sigmoid(10) × sigmoid(5) ≈ 0.99995 × 0.9933 ≈ 0.993
+    EXPECT_NEAR(boxes[0].confidence, sigmoid(10.0f) * sigmoid(5.0f), 1e-3f);
+}
 
 // ---------------------------------------------------------------------------
 // Test 1: YOLOMock returns 1 person detection → values match known labels
